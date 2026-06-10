@@ -1,0 +1,16 @@
+{
+  "name": "VOIDSURGE",
+  "short_name": "VOIDSURGE",
+  "description": "A neon wave-survival twin-stick shooter. The void is hungry. Feed it.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#04040a",
+  "theme_color": "#04040a",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

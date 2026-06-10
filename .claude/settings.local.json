@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(node tools\\\\make-icons.js)",
+      "PowerShell(node smoketest.js)"
+    ]
+  }
+}
