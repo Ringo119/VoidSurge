@@ -190,4 +190,36 @@ check("tap restarts after death", get("state") === "play" && get("wave") === 1);
 frames(60);
 check("touch session frames run clean", true);
 
+// ---- meta progression ----
+check("top-10 board persisted", get("JSON.parse(localStorage.getItem('voidsurge_scores')).length") >= 1);
+check("lifetime stats persisted", get("JSON.parse(localStorage.getItem('voidsurge_stats')).runs") >= 2);
+
+// die again, then go to the title menu instead of restarting
+run("player.shield = 0; player.invuln = 0; player.dashing = 0; damagePlayer(99999);");
+frames(80);
+check("death cause recorded", get("Object.keys(stats.deathsBy).length") >= 1);
+key("KeyT");
+check("menu reachable from game over", get("state") === "title");
+
+// menu screens render and navigate
+key("KeyH"); check("scores screen opens", get("state") === "scores");
+frames(10);
+key("Escape"); check("escape returns to title", get("state") === "title");
+key("KeyS"); check("stats screen opens", get("state") === "stats");
+frames(10);
+key("Escape");
+key("KeyC"); check("hangar opens", get("state") === "ships");
+frames(10);
+
+// unlock + equip a skin
+run("unlock('crimson');");
+key("Digit2");
+check("skin equipped and saved", get("skinId") === "crimson" && get("localStorage.getItem('voidsurge_skin')") === "crimson");
+check("locked skin can't be equipped", (run("selectSkin('spectre')"), get("skinId") === "crimson"));
+key("Escape");
+key("Enter");
+check("start from title after menus", get("state") === "play" && get("wave") === 1);
+frames(60);
+check("meta frames run clean", true);
+
 console.log(`\n${pass} checks passed — VOIDSURGE smoke test complete.`);

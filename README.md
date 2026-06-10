@@ -77,6 +77,8 @@ A true App Store build (e.g. wrapping this with [Capacitor](https://capacitorjs.
 | 1 / 2 / 3 or click | Pick an augment between waves |
 | P / Esc | Pause |
 | M | Mute |
+| H / S / C (title) | Score board / stats / ship hangar |
+| T (death screen) | Back to title menu |
 
 ## Features
 
@@ -86,7 +88,11 @@ A true App Store build (e.g. wrapping this with [Capacitor](https://capacitorjs.
 - **Combo multiplier** (up to 9x) that resets when you take a hit
 - **Synthesized audio**: laser/explosion/pickup SFX plus a looping minor-key chiptune sequencer, all Web Audio — zero sound files
 - **Game feel**: screen shake, hit flashes, knockback, particle explosions, spawn telegraphs, parallax starfield, neon glow rendering
-- **Persistent high score** via localStorage
+- **Meta progression** (all saved in localStorage):
+  - **Top-10 score board** — every run is ranked; see it from the title screen (SCORES) and your placement on the death screen
+  - **Service record** — lifetime stats: runs, kills by enemy type, what killed you, bosses destroyed, best combo, dashes, pickups, favorite augment, time played (STATS)
+  - **Hangar** — 8 ship skins unlocked by achievements (kill a boss, reach wave 10/20, max combo, 100 dashes, 250 pickups, clear wave 5+ untouched); recolors hull, trail, and bullets (SHIPS)
+  - **Score ghosts** — a marker on the wave where your best run died, and a "record pace" toast when you pass your old high score mid-run
 - **Mobile**: twin-stick touch controls, safe-area-aware HUD, PWA manifest + service worker, generated home-screen icons
 
 ## Dev

@@ -76,6 +76,7 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const dist2 = (ax, ay, bx, by) => { const dx = bx - ax, dy = by - ay; return dx * dx + dy * dy; };
 const angleTo = (ax, ay, bx, by) => Math.atan2(by - ay, bx - ax);
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+const inRect = (x, y, r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 
 // ---------- Audio (all synthesized) ----------
 const Sound = {
@@ -211,8 +212,18 @@ function onTouchStart(e) {
   Sound.init(); Sound.resume();
   for (const t of e.changedTouches) {
     const x = t.clientX, y = t.clientY;
-    if (state === "title") { startGame(); return; }
-    if (state === "over") { if (gameOverT > 0.8) startGame(); return; }
+    if (state === "title") {
+      const b = titleButtonAt(x, y);
+      if (b) state = b; else startGame();
+      return;
+    }
+    if (state === "scores" || state === "stats") { state = "title"; return; }
+    if (state === "ships") { if (!shipCardAction(x, y)) state = "title"; return; }
+    if (state === "over") {
+      if (gameOverT > 0.4 && inRect(x, y, overMenuRect())) state = "title";
+      else if (gameOverT > 0.8) startGame();
+      return;
+    }
     if (state === "upgrade") {
       const rects = upgradeCardRects();
       for (let i = 0; i < rects.length; i++) {
@@ -282,6 +293,67 @@ let gameOverT = 0;
 // Entity arrays
 let bullets = [], enemyBullets = [], enemies = [], particles = [], pickups = [], texts = [], drones = [];
 let boss = null;
+
+// ---------- Meta progression (persistent) ----------
+function loadJSON(key, fb) {
+  try { const v = JSON.parse(localStorage.getItem(key)); return v === null ? fb : v; }
+  catch (e) { return fb; }
+}
+function saveJSON(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
+function bump(obj, key) { obj[key] = (obj[key] || 0) + 1; }
+
+let scores = loadJSON("voidsurge_scores", []); // top 10 runs: { s: score, w: wave, d: "YYYY-MM-DD" }
+const stats = Object.assign({
+  runs: 0, kills: 0, wavesCleared: 0, bosses: 0, bestWave: 0, bestCombo: 0,
+  dashes: 0, pickups: 0, playTime: 0, killsBy: {}, deathsBy: {}, augments: {},
+}, loadJSON("voidsurge_stats", {}));
+function saveStats() { saveJSON("voidsurge_stats", stats); }
+
+// Ship skins, each unlocked by an achievement
+const SKINS = [
+  { id: "vanguard", name: "VANGUARD", hull: "#7df9ff", fill: "#0c2233", trail: "#3fa9ff", bullet: "#7df9ff", unlock: "always yours" },
+  { id: "crimson",  name: "CRIMSON",  hull: "#ff3d6e", fill: "#330a14", trail: "#ff5e3a", bullet: "#ff7a9c", unlock: "destroy a Void Harbinger" },
+  { id: "volt",     name: "VOLT",     hull: "#ffe066", fill: "#332a08", trail: "#ffaa00", bullet: "#ffe066", unlock: "reach combo x9" },
+  { id: "ember",    name: "EMBER",    hull: "#ff5e3a", fill: "#33100a", trail: "#ffaa00", bullet: "#ffc09a", unlock: "reach wave 10" },
+  { id: "spectre",  name: "SPECTRE",  hull: "#b14dff", fill: "#1d0a33", trail: "#b14dff", bullet: "#d9a8ff", unlock: "reach wave 20" },
+  { id: "aurora",   name: "AURORA",   hull: "#27e8a7", fill: "#06281c", trail: "#27e8a7", bullet: "#9dffd9", unlock: "dash 100 times (lifetime)" },
+  { id: "midas",    name: "MIDAS",    hull: "#ffd700", fill: "#33260a", trail: "#ffe066", bullet: "#fff3b0", unlock: "grab 250 pickups (lifetime)" },
+  { id: "ghost",    name: "GHOST",    hull: "#e8f4ff", fill: "#1a2230", trail: "#8aa8c8", bullet: "#ffffff", unlock: "clear wave 5+ untouched" },
+];
+const unlocked = Object.assign({ vanguard: true }, loadJSON("voidsurge_ach", {}));
+let skinId = "vanguard";
+try { const sv = localStorage.getItem("voidsurge_skin"); if (sv && unlocked[sv]) skinId = sv; } catch (e) {}
+let SKIN = SKINS.find(s => s.id === skinId) || SKINS[0];
+
+function selectSkin(id) {
+  if (!unlocked[id]) return;
+  skinId = id;
+  SKIN = SKINS.find(s => s.id === id) || SKINS[0];
+  try { localStorage.setItem("voidsurge_skin", id); } catch (e) {}
+  Sound.pickup();
+}
+
+const toasts = [];
+function toast(str) {
+  toasts.push({ str, life: 4 });
+  if (toasts.length > 3) toasts.shift();
+}
+
+function unlock(id) {
+  if (unlocked[id]) return;
+  unlocked[id] = true;
+  saveJSON("voidsurge_ach", unlocked);
+  const sk = SKINS.find(s => s.id === id);
+  if (sk) toast("UNLOCKED: " + sk.name + " SHIP");
+  Sound.upgrade();
+}
+
+// run-scoped meta state
+let lastRunRank = -1;     // where the run that just ended landed on the board
+let ghostWave = 0;        // wave where your best run died
+let ghostNoteT = 0;
+let recordBroken = false;
+let damagedThisWave = false;
 
 // ---------- Stars (parallax background) ----------
 const stars = [];
@@ -361,6 +433,7 @@ function chooseUpgrade(i) {
   if (!u) return;
   u.apply();
   taken[u.id] = (taken[u.id] || 0) + 1;
+  bump(stats.augments, u.id);
   Sound.upgrade();
   spawnText(player.x, player.y - 40, u.name, "#7df9ff", 18);
   startWave(wave + 1);
@@ -408,6 +481,11 @@ function startWave(n) {
   state = "play";
   waveActive = true;
   waveBannerT = 2.2;
+  damagedThisWave = false;
+  ghostNoteT = (n > 1 && n === ghostWave) ? 3.2 : 0; // score ghost: best run died here
+  if (n > stats.bestWave) stats.bestWave = n;
+  if (n >= 10) unlock("ember");
+  if (n >= 20) unlock("spectre");
   player.shield = player.maxShield;
   bullets = []; enemyBullets = [];
   spawnQueue = [];
@@ -488,6 +566,9 @@ function killEnemy(e) {
   score += pts;
   combo = Math.min(combo + 1, 9);
   comboTimer = 3.5;
+  stats.kills++; bump(stats.killsBy, e.type);
+  if (combo > stats.bestCombo) stats.bestCombo = combo;
+  if (combo >= 9) unlock("volt");
   spawnText(e.x, e.y, "+" + pts, "#ffe066", 13);
   if (player.lifesteal > 0) player.hp = Math.min(player.hp + player.lifesteal, player.maxHp);
   if (e.type === "titan") {
@@ -499,8 +580,9 @@ function killEnemy(e) {
   else if (Math.random() < 0.18) spawnPickup(e.x, e.y, "gem");
 }
 
-function damagePlayer(dmg) {
+function damagePlayer(dmg, src = "the void") {
   if (player.invuln > 0 || player.dashing > 0) return;
+  damagedThisWave = true;
   if (player.shield > 0) {
     player.shield--;
     Sound.hit();
@@ -519,6 +601,7 @@ function damagePlayer(dmg) {
   spawnParticles(player.x, player.y, "#ff3d6e", 14, 200, 0.5);
   if (player.hp <= 0) {
     player.hp = 0;
+    bump(stats.deathsBy, src);
     gameOver();
   }
 }
@@ -527,17 +610,29 @@ function gameOver() {
   state = "over";
   gameOverT = 0;
   Sound.gameOver();
-  spawnParticles(player.x, player.y, "#7df9ff", 60, 320, 1.2, 5);
+  spawnParticles(player.x, player.y, SKIN.hull, 60, 320, 1.2, 5);
   shake = 22;
   if (score > highScore) {
     highScore = score;
     try { localStorage.setItem("voidsurge_hi", highScore); } catch (e) {} // Safari private mode throws
   }
+  // top-10 board
+  const entry = { s: score, w: wave, d: new Date().toISOString().slice(0, 10) };
+  scores.push(entry);
+  scores.sort((a, b) => b.s - a.s);
+  scores = scores.slice(0, 10);
+  lastRunRank = scores.indexOf(entry);
+  saveJSON("voidsurge_scores", scores);
+  saveStats();
 }
 
 function startGame() {
   resetPlayer();
   for (const k in taken) delete taken[k];
+  stats.runs++;
+  ghostWave = scores.length ? scores[0].w : 0;
+  recordBroken = false;
+  lastRunRank = -1;
   score = 0; combo = 1; comboTimer = 0;
   bullets = []; enemyBullets = []; enemies = []; particles = []; pickups = []; texts = []; drones = [];
   boss = null;
@@ -548,8 +643,24 @@ function startGame() {
 function handleKeyPress(code) {
   Sound.init(); Sound.resume();
   if (code === "KeyM") { Sound.muted = !Sound.muted; return; }
-  if (state === "title" && (code === "Enter" || code === "Space")) { startGame(); return; }
-  if (state === "over" && (code === "Enter" || code === "KeyR") && gameOverT > 0.8) { startGame(); return; }
+  if (state === "title") {
+    if (code === "Enter" || code === "Space") { startGame(); return; }
+    if (code === "KeyH") { state = "scores"; return; }
+    if (code === "KeyS") { state = "stats"; return; }
+    if (code === "KeyC") { state = "ships"; return; }
+  }
+  if (state === "scores" || state === "stats" || state === "ships") {
+    if (code === "Escape" || code === "KeyB") { state = "title"; return; }
+    if (state === "ships") {
+      const m = /^Digit([1-8])$/.exec(code);
+      if (m && SKINS[+m[1] - 1]) selectSkin(SKINS[+m[1] - 1].id);
+    }
+    return;
+  }
+  if (state === "over") {
+    if (code === "KeyT") { state = "title"; return; }
+    if ((code === "Enter" || code === "KeyR") && gameOverT > 0.8) { startGame(); return; }
+  }
   if (state === "upgrade") {
     if (code === "Digit1") chooseUpgrade(0);
     if (code === "Digit2") chooseUpgrade(1);
@@ -564,8 +675,21 @@ function handleKeyPress(code) {
 
 function handleClick() {
   Sound.init(); Sound.resume();
-  if (state === "title") { startGame(); return; }
-  if (state === "over" && gameOverT > 0.8) { startGame(); return; }
+  if (state === "title") {
+    const b = titleButtonAt(mouse.x, mouse.y);
+    if (b) { state = b; return; }
+    startGame(); return;
+  }
+  if (state === "scores" || state === "stats") { state = "title"; return; }
+  if (state === "ships") {
+    if (!shipCardAction(mouse.x, mouse.y)) state = "title";
+    return;
+  }
+  if (state === "over") {
+    if (gameOverT > 0.4 && inRect(mouse.x, mouse.y, overMenuRect())) { state = "title"; return; }
+    if (gameOverT > 0.8) startGame();
+    return;
+  }
   if (state === "upgrade" && hoveredCard >= 0) chooseUpgrade(hoveredCard);
 }
 
@@ -586,8 +710,10 @@ function tryDash() {
   player.vy = dy / len * 780;
   player.dashing = 0.18;
   player.dashT = player.dashCd;
+  stats.dashes++;
+  if (stats.dashes >= 100) unlock("aurora");
   Sound.dash();
-  spawnParticles(player.x, player.y, "#7df9ff", 12, 150, 0.4);
+  spawnParticles(player.x, player.y, SKIN.hull, 12, 150, 0.4);
 }
 
 // ---------- Update ----------
@@ -598,6 +724,11 @@ function update(dt) {
   if (flashAlpha > 0) flashAlpha = Math.max(0, flashAlpha - dt * 1.2);
   if (waveBannerT > 0) waveBannerT -= dt;
   if (bossWarnT > 0) bossWarnT -= dt;
+  if (ghostNoteT > 0) ghostNoteT -= dt;
+  for (let i = toasts.length - 1; i >= 0; i--) {
+    toasts[i].life -= dt;
+    if (toasts[i].life <= 0) toasts.splice(i, 1);
+  }
 
   // particles & texts always animate
   updateParticles(dt);
@@ -618,9 +749,19 @@ function update(dt) {
   // combo decay
   if (comboTimer > 0) { comboTimer -= dt; if (comboTimer <= 0) combo = 1; }
 
+  // lifetime stats + record pace ghost
+  stats.playTime += dt;
+  if (!recordBroken && highScore > 0 && score > highScore) {
+    recordBroken = true;
+    toast("RECORD PACE — old best " + highScore.toLocaleString());
+  }
+
   // wave complete?
   if (waveActive && spawnQueue.length === 0 && enemies.length === 0 && !boss) {
     waveActive = false;
+    stats.wavesCleared++;
+    if (!damagedThisWave && wave >= 5) unlock("ghost");
+    saveStats();
     score += wave * 25;
     spawnText(W / 2, H / 2 - 60, "WAVE CLEAR  +" + (wave * 25), "#7df9ff", 22);
     setTimeout(() => {}, 0);
@@ -650,7 +791,7 @@ function updatePlayer(dt) {
     player.vx *= Math.pow(0.4, dt);
     player.vy *= Math.pow(0.4, dt);
     // dash trail
-    spawnParticles(player.x, player.y, "#7df9ff", 2, 30, 0.35, 4);
+    spawnParticles(player.x, player.y, SKIN.hull, 2, 30, 0.35, 4);
   } else {
     const accel = 2400;
     player.vx = approach(player.vx, dx * player.speed, accel * dt);
@@ -674,7 +815,7 @@ function updatePlayer(dt) {
     particles.push({
       x: player.x + Math.cos(ba) * 12, y: player.y + Math.sin(ba) * 12,
       vx: Math.cos(ba) * 80 + rand(-20, 20), vy: Math.sin(ba) * 80 + rand(-20, 20),
-      life: 0.3, maxLife: 0.3, color: "#3fa9ff", size: rand(2, 4),
+      life: 0.3, maxLife: 0.3, color: SKIN.trail, size: rand(2, 4),
     });
   }
 
@@ -793,7 +934,7 @@ function updateEnemies(dt) {
         e.fireT -= dt;
         if (e.fireT <= 0 && d < 560) {
           e.fireT = rand(1.6, 2.4);
-          enemyShoot(e.x, e.y, aToP, 240, e.dmg);
+          enemyShoot(e.x, e.y, aToP, 240, e.dmg, e.type);
         }
         break;
       }
@@ -807,7 +948,7 @@ function updateEnemies(dt) {
         e.fireT -= dt;
         if (e.fireT <= 0) {
           e.fireT = rand(2.0, 3.0);
-          enemyShoot(e.x, e.y, aToP, 220, e.dmg);
+          enemyShoot(e.x, e.y, aToP, 220, e.dmg, e.type);
         }
         break;
       }
@@ -821,7 +962,7 @@ function updateEnemies(dt) {
 
     // touch damage
     if (dist2(e.x, e.y, player.x, player.y) < (e.r + player.r) * (e.r + player.r)) {
-      damagePlayer(e.dmg);
+      damagePlayer(e.dmg, e.type);
       // knock enemy back a bit
       e.x -= Math.cos(aToP) * 20;
       e.y -= Math.sin(aToP) * 20;
@@ -829,9 +970,9 @@ function updateEnemies(dt) {
   }
 }
 
-function enemyShoot(x, y, angle, speed, dmg) {
+function enemyShoot(x, y, angle, speed, dmg, src) {
   Sound.enemyShoot();
-  enemyBullets.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, dmg, life: 4, r: 5 });
+  enemyBullets.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, dmg, life: 4, r: 5, src });
 }
 
 function updateBoss(dt) {
@@ -876,11 +1017,11 @@ function updateBoss(dt) {
       b.fireT = 1.7;
       const n = 14 + Math.floor(b.scale * 2);
       const off = rand(0, TAU);
-      for (let i = 0; i < n; i++) enemyShoot(b.x, b.y, off + (TAU * i / n), 170, b.dmg * 0.5);
+      for (let i = 0; i < n; i++) enemyShoot(b.x, b.y, off + (TAU * i / n), 170, b.dmg * 0.5, "boss");
     } else if (b.phase === 1) {
       // aimed spread volley
       b.fireT = 0.9;
-      for (let i = -2; i <= 2; i++) enemyShoot(b.x, b.y, aToP + i * 0.16, 280, b.dmg * 0.5);
+      for (let i = -2; i <= 2; i++) enemyShoot(b.x, b.y, aToP + i * 0.16, 280, b.dmg * 0.5, "boss");
     } else {
       b.fireT = 1.2;
     }
@@ -898,7 +1039,7 @@ function updateBoss(dt) {
 
   // touch damage
   if (dist2(b.x, b.y, player.x, player.y) < (b.r + player.r) * (b.r + player.r)) {
-    damagePlayer(b.dmg);
+    damagePlayer(b.dmg, "boss");
   }
 }
 
@@ -941,6 +1082,8 @@ function updateBullets(dt) {
         b.hit.add(boss);
         if (b.pierce > 0) b.pierce--; else consumed = true;
         if (boss.hp <= 0) {
+          stats.kills++; stats.bosses++; bump(stats.killsBy, "boss");
+          unlock("crimson");
           Sound.boom(true);
           spawnParticles(boss.x, boss.y, boss.color, 70, 360, 1.2, 6);
           spawnParticles(boss.x, boss.y, "#ffe066", 40, 280, 1.0, 4);
@@ -970,7 +1113,7 @@ function updateEnemyBullets(dt) {
     }
     if (dist2(b.x, b.y, player.x, player.y) < (b.r + player.r - 3) * (b.r + player.r - 3)) {
       enemyBullets.splice(i, 1);
-      damagePlayer(b.dmg);
+      damagePlayer(b.dmg, b.src || "bullet");
     }
   }
 }
@@ -993,6 +1136,8 @@ function updatePickups(dt) {
     p.x += p.vx * dt; p.y += p.vy * dt;
     if (d < player.r + 12) {
       pickups.splice(i, 1);
+      stats.pickups++;
+      if (stats.pickups >= 250) unlock("midas");
       if (p.kind === "heal") {
         player.hp = Math.min(player.hp + 20, player.maxHp);
         Sound.heal();
@@ -1044,9 +1189,13 @@ function render() {
   drawStars();
   drawGrid();
 
-  if (state === "title") {
-    drawTitle();
+  if (state === "title" || state === "scores" || state === "stats" || state === "ships") {
+    if (state === "title") drawTitle();
+    else if (state === "scores") drawScores();
+    else if (state === "stats") drawStats();
+    else drawShips();
     drawParticles();
+    drawToasts();
     ctx.restore();
     return;
   }
@@ -1062,6 +1211,7 @@ function render() {
   drawTexts();
   drawHUD();
   drawTouchControls();
+  drawToasts();
 
   if (state === "upgrade") drawUpgradeScreen();
   if (state === "over") drawGameOver();
@@ -1128,10 +1278,10 @@ function drawPlayer() {
   }
 
   ctx.rotate(p.angle);
-  neon("#7df9ff", 16);
+  neon(SKIN.hull, 16);
   // ship body
-  ctx.fillStyle = "#0c2233";
-  ctx.strokeStyle = "#7df9ff";
+  ctx.fillStyle = SKIN.fill;
+  ctx.strokeStyle = SKIN.hull;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(16, 0);
@@ -1142,7 +1292,7 @@ function drawPlayer() {
   ctx.fill();
   ctx.stroke();
   // cockpit dot
-  ctx.fillStyle = "#7df9ff";
+  ctx.fillStyle = SKIN.hull;
   ctx.beginPath();
   ctx.arc(4, 0, 3, 0, TAU);
   ctx.fill();
@@ -1181,7 +1331,7 @@ function drawBullets() {
     ctx.save();
     ctx.translate(b.x, b.y);
     ctx.rotate(a);
-    const col = b.crit ? "#ffe066" : b.drone ? "#ffd28a" : "#7df9ff";
+    const col = b.crit ? "#ffe066" : b.drone ? "#ffd28a" : SKIN.bullet;
     neon(col, 10);
     ctx.fillStyle = col;
     ctx.fillRect(-7, -2, 14, 4);
@@ -1432,6 +1582,20 @@ function drawTexts() {
   ctx.restore();
 }
 
+function drawToasts() {
+  if (!toasts.length) return;
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.font = "bold 15px 'Courier New', monospace";
+  toasts.forEach((t, i) => {
+    ctx.globalAlpha = clamp(t.life / 0.6, 0, 1) * 0.95;
+    ctx.fillStyle = "#ffe066";
+    neon("#ffe066", 10);
+    ctx.fillText(t.str, W / 2, 86 + SAFE.t + i * 24);
+  });
+  ctx.restore();
+}
+
 function drawHUD() {
   ctx.save();
   ctx.shadowBlur = 0;
@@ -1514,6 +1678,16 @@ function drawHUD() {
     ctx.fillStyle = wave % 5 === 0 ? "#ff2255" : "#7df9ff";
     neon(ctx.fillStyle, 20);
     ctx.fillText(wave % 5 === 0 ? "⚠ BOSS WAVE ⚠" : "WAVE " + wave, W / 2, H * 0.32);
+    ctx.globalAlpha = 1;
+  }
+
+  // score ghost: your best run ended on this wave
+  if (ghostNoteT > 0 && state === "play") {
+    ctx.globalAlpha = clamp(Math.min(ghostNoteT, 3.2 - ghostNoteT) * 2, 0, 0.85);
+    ctx.font = "bold 14px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ff7a9c";
+    ctx.fillText("☠ your best run died on this wave", W / 2, H * 0.32 + 30);
     ctx.globalAlpha = 1;
   }
 
@@ -1633,8 +1807,231 @@ function drawTitle() {
   if (highScore > 0) {
     ctx.font = "bold 14px 'Courier New', monospace";
     ctx.fillStyle = "#8aa8c8";
-    ctx.fillText("HIGH SCORE  " + highScore.toLocaleString(), W / 2, H * 0.86);
+    ctx.fillText("HIGH SCORE  " + highScore.toLocaleString(), W / 2, H * 0.84);
   }
+
+  // menu buttons: scores / stats / hangar
+  for (const b of titleButtons()) {
+    const hov = !TOUCH.active && inRect(mouse.x, mouse.y, b);
+    ctx.fillStyle = hov ? "rgba(20,26,46,0.95)" : "rgba(10,14,28,0.8)";
+    ctx.strokeStyle = hov ? "#ffe066" : "#3a6f8a";
+    ctx.lineWidth = 2;
+    roundRect(b.x, b.y, b.w, b.h, 8);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = hov ? "#ffe066" : "#8aa8c8";
+    ctx.font = "bold 13px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(b.label + (TOUCH.active ? "" : " [" + b.key + "]"), b.x + b.w / 2, b.y + b.h / 2 + 5);
+  }
+  ctx.restore();
+}
+
+function titleButtons() {
+  const bw = Math.min(150, (W - 80) / 3 - 10), bh = 38, gap = 14;
+  const x0 = W / 2 - (bw * 3 + gap * 2) / 2;
+  const y = H - bh - 14 - SAFE.b;
+  return [
+    { id: "scores", label: "SCORES", key: "H", x: x0, y, w: bw, h: bh },
+    { id: "stats",  label: "STATS",  key: "S", x: x0 + bw + gap, y, w: bw, h: bh },
+    { id: "ships",  label: "SHIPS",  key: "C", x: x0 + (bw + gap) * 2, y, w: bw, h: bh },
+  ];
+}
+
+function titleButtonAt(x, y) {
+  const b = titleButtons().find(b => inRect(x, y, b));
+  return b ? b.id : null;
+}
+
+function drawMenuChrome(title, hint) {
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.font = "bold 34px 'Courier New', monospace";
+  ctx.fillStyle = "#7df9ff";
+  neon("#7df9ff", 16);
+  ctx.fillText(title, W / 2, H * 0.16);
+  ctx.shadowBlur = 0;
+  ctx.font = "12px 'Courier New', monospace";
+  ctx.fillStyle = "#8aa8c8";
+  ctx.globalAlpha = 0.7;
+  ctx.fillText(hint || (TOUCH.active ? "tap anywhere to go back" : "[ESC] back"), W / 2, H * 0.16 + 22);
+  ctx.restore();
+}
+
+function drawScores() {
+  drawMenuChrome("TOP 10 RUNS");
+  ctx.save();
+  ctx.font = "bold 15px 'Courier New', monospace";
+  if (!scores.length) {
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#8aa8c8";
+    ctx.fillText("no runs yet — the void awaits", W / 2, H * 0.5);
+    ctx.restore();
+    return;
+  }
+  const lh = Math.min(30, (H * 0.62) / 10);
+  const y0 = H * 0.30;
+  scores.forEach((e, i) => {
+    const y = y0 + i * lh;
+    const isLast = i === lastRunRank;
+    if (isLast) neon("#ffe066", 8); else ctx.shadowBlur = 0;
+    ctx.fillStyle = isLast ? "#ffe066" : i === 0 ? "#7df9ff" : "#cfe8ff";
+    ctx.textAlign = "right";
+    ctx.fillText("#" + (i + 1), W * 0.32, y);
+    ctx.fillText(e.s.toLocaleString(), W * 0.52, y);
+    ctx.textAlign = "left";
+    ctx.fillStyle = isLast ? "#ffe066" : "#8aa8c8";
+    ctx.fillText("wave " + e.w, W * 0.57, y);
+    ctx.fillText(e.d, W * 0.72, y);
+  });
+  ctx.restore();
+}
+
+function drawStats() {
+  drawMenuChrome("SERVICE RECORD");
+  ctx.save();
+  ctx.font = "bold 14px 'Courier New', monospace";
+  const lh = Math.min(26, H * 0.058);
+  const y0 = H * 0.30;
+
+  let fav = "—", favN = 0;
+  for (const id in stats.augments) {
+    if (stats.augments[id] > favN) {
+      favN = stats.augments[id];
+      fav = (UPGRADES.find(u => u.id === id) || { name: id }).name;
+    }
+  }
+  const t = Math.floor(stats.playTime);
+  const timeStr = t >= 3600
+    ? Math.floor(t / 3600) + "h " + Math.floor((t % 3600) / 60) + "m"
+    : Math.floor(t / 60) + "m " + (t % 60) + "s";
+
+  const rows = [
+    ["RUNS", stats.runs],
+    ["BEST WAVE", stats.bestWave],
+    ["WAVES CLEARED", stats.wavesCleared],
+    ["BOSSES DESTROYED", stats.bosses],
+    ["BEST COMBO", "x" + stats.bestCombo],
+    ["TOTAL KILLS", stats.kills.toLocaleString()],
+    ["DASHES", stats.dashes.toLocaleString()],
+    ["PICKUPS", stats.pickups.toLocaleString()],
+    ["TIME IN THE VOID", timeStr],
+    ["FAVORITE AUGMENT", fav],
+  ];
+  rows.forEach((r, i) => {
+    const y = y0 + i * lh;
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#8aa8c8";
+    ctx.fillText(r[0], W * 0.44, y);
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#cfe8ff";
+    ctx.fillText(String(r[1]), W * 0.47, y);
+  });
+
+  const names = ["drifter", "darter", "sentry", "orbiter", "titan", "boss"];
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#7df9ff";
+  ctx.fillText("KILLS BY TYPE", W * 0.62, y0);
+  names.forEach((n, i) => {
+    const y = y0 + (i + 1) * lh * 0.85;
+    ctx.fillStyle = n === "boss" ? "#ff2255" : ENEMY_TYPES[n].color;
+    ctx.fillText(n.toUpperCase(), W * 0.62, y);
+    ctx.fillStyle = "#cfe8ff";
+    ctx.fillText(String(stats.killsBy[n] || 0), W * 0.79, y);
+  });
+  const dy0 = y0 + 7 * lh * 0.85 + lh * 0.6;
+  ctx.fillStyle = "#ff3d6e";
+  ctx.fillText("FELLED BY", W * 0.62, dy0);
+  const deaths = Object.entries(stats.deathsBy).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  if (!deaths.length) {
+    ctx.fillStyle = "#8aa8c8";
+    ctx.fillText("nothing yet", W * 0.62, dy0 + lh * 0.85);
+  }
+  deaths.forEach(([n, c], i) => {
+    ctx.fillStyle = "#8aa8c8";
+    ctx.fillText(n.toUpperCase() + " ×" + c, W * 0.62, dy0 + (i + 1) * lh * 0.85);
+  });
+  ctx.restore();
+}
+
+function shipCardRects() {
+  const cols = 4, gap = 14;
+  const cw = Math.min(168, (W - 60 - (cols - 1) * gap) / cols);
+  const ch = Math.min(150, H * 0.30);
+  const x0 = W / 2 - (cols * cw + (cols - 1) * gap) / 2;
+  const y0 = H * 0.26;
+  return SKINS.map((s, i) => ({
+    x: x0 + (i % cols) * (cw + gap),
+    y: y0 + Math.floor(i / cols) * (ch + gap),
+    w: cw, h: ch,
+  }));
+}
+
+function shipCardAction(x, y) {
+  const rects = shipCardRects();
+  for (let i = 0; i < rects.length; i++) {
+    if (inRect(x, y, rects[i])) {
+      if (unlocked[SKINS[i].id]) selectSkin(SKINS[i].id);
+      return true; // consume taps on locked cards too
+    }
+  }
+  return false;
+}
+
+function drawShips() {
+  drawMenuChrome("HANGAR", TOUCH.active ? "tap empty space to go back" : "[ESC] back");
+  ctx.save();
+  const rects = shipCardRects();
+  SKINS.forEach((s, i) => {
+    const r = rects[i];
+    const isSel = s.id === skinId;
+    const isUn = !!unlocked[s.id];
+    const hov = !TOUCH.active && isUn && inRect(mouse.x, mouse.y, r);
+    ctx.save();
+    ctx.globalAlpha = isUn ? 1 : 0.55;
+    neon(isSel ? "#ffe066" : s.hull, isSel ? 14 : hov ? 10 : 4);
+    ctx.fillStyle = "rgba(10,14,28,0.92)";
+    ctx.strokeStyle = isSel ? "#ffe066" : isUn ? (hov ? s.hull : "#3a6f8a") : "#26303f";
+    ctx.lineWidth = 2;
+    roundRect(r.x, r.y, r.w, r.h, 8);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // mini ship preview, pointing up
+    ctx.save();
+    ctx.translate(r.x + r.w / 2, r.y + r.h * 0.34);
+    ctx.rotate(-Math.PI / 2);
+    ctx.scale(1.3, 1.3);
+    neon(isUn ? s.hull : "#444f5e", 10);
+    ctx.fillStyle = isUn ? s.fill : "#181d26";
+    ctx.strokeStyle = isUn ? s.hull : "#444f5e";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(16, 0); ctx.lineTo(-10, -10); ctx.lineTo(-5, 0); ctx.lineTo(-10, 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.textAlign = "center";
+    ctx.font = "bold 13px 'Courier New', monospace";
+    ctx.fillStyle = isUn ? s.hull : "#5e6b7d";
+    ctx.fillText(s.name, r.x + r.w / 2, r.y + r.h * 0.64);
+
+    ctx.font = "10px 'Courier New', monospace";
+    if (isSel) {
+      ctx.fillStyle = "#ffe066";
+      ctx.fillText("EQUIPPED", r.x + r.w / 2, r.y + r.h - 10);
+    } else if (isUn) {
+      ctx.fillStyle = "#8aa8c8";
+      ctx.fillText(TOUCH.active ? "TAP TO EQUIP" : "[" + (i + 1) + "] EQUIP", r.x + r.w / 2, r.y + r.h - 10);
+    } else {
+      ctx.fillStyle = "#5e6b7d";
+      wrapText("LOCKED: " + s.unlock, r.x + r.w / 2, r.y + r.h - 24, r.w - 14, 12);
+    }
+    ctx.restore();
+  });
   ctx.restore();
 }
 
@@ -1761,6 +2158,9 @@ function drawGameOver() {
       neon("#27e8a7", 10);
       ctx.fillText("★ NEW HIGH SCORE ★", W / 2, H * 0.48 + 56);
       ctx.shadowBlur = 0;
+    } else if (lastRunRank >= 0) {
+      ctx.fillStyle = "#7df9ff";
+      ctx.fillText("#" + (lastRunRank + 1) + " ON YOUR TOP 10", W / 2, H * 0.48 + 56);
     }
   }
   if (gameOverT > 0.8 && Math.floor(time * 1.6) % 2 === 0) {
@@ -1769,7 +2169,25 @@ function drawGameOver() {
     ctx.textAlign = "center";
     ctx.fillText(TOUCH.active ? "TAP TO DIVE AGAIN" : "CLICK OR PRESS R TO DIVE AGAIN", W / 2, H * 0.7);
   }
+  if (gameOverT > 0.8) {
+    const r = overMenuRect();
+    const hov = !TOUCH.active && inRect(mouse.x, mouse.y, r);
+    ctx.fillStyle = "rgba(10,14,28,0.8)";
+    ctx.strokeStyle = hov ? "#ffe066" : "#3a6f8a";
+    ctx.lineWidth = 2;
+    roundRect(r.x, r.y, r.w, r.h, 8);
+    ctx.fill();
+    ctx.stroke();
+    ctx.font = "bold 13px 'Courier New', monospace";
+    ctx.fillStyle = hov ? "#ffe066" : "#8aa8c8";
+    ctx.textAlign = "center";
+    ctx.fillText(TOUCH.active ? "MENU" : "MENU [T]", r.x + r.w / 2, r.y + 21);
+  }
   ctx.restore();
+}
+
+function overMenuRect() {
+  return { x: W / 2 - 70, y: H * 0.78, w: 140, h: 32 };
 }
 
 function drawPaused() {
