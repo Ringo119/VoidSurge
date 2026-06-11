@@ -60,7 +60,7 @@ Any other HTTPS host (Netlify, Cloudflare Pages, an `ngrok`/`cloudflared` tunnel
 | Drag on the **right half** | Aim — fires automatically while held |
 | **DASH** button (bottom-right) | Dash with brief invincibility; ring shows cooldown |
 | **II** / **♪** buttons (top-right) | Pause / mute |
-| Tap a card | Pick an augment between waves |
+| Tap a card, then **✓ CONFIRM** | Pick an augment between waves (two taps, so a stray end-of-wave tap can't pick) |
 | Tap anywhere | Start, resume from pause, or restart after death |
 
 ### Native app option
@@ -74,7 +74,7 @@ A true App Store build (e.g. wrapping this with [Capacitor](https://capacitorjs.
 | WASD / Arrows | Move |
 | Mouse | Aim — hold left button to fire |
 | Space | Dash (brief invincibility) |
-| 1 / 2 / 3 or click | Pick an augment between waves |
+| 1 / 2 / 3 or click | Select an augment between waves; same key again, Enter, or the ✓ CONFIRM button locks it in |
 | P / Esc | Pause |
 | M | Mute |
 | H / S / C / O (title) | Score board / stats / ship hangar / settings |

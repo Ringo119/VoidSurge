@@ -246,10 +246,11 @@ function onTouchStart(e) {
       return;
     }
     if (state === "upgrade") {
+      if (selectedCard >= 0 && inRect(x, y, confirmBtnRect())) { chooseUpgrade(selectedCard); continue; }
       const rects = upgradeCardRects();
       for (let i = 0; i < rects.length; i++) {
         const r = rects[i];
-        if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { chooseUpgrade(i); break; }
+        if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { selectCard(i); break; }
       }
       continue;
     }
@@ -300,7 +301,7 @@ if (typeof document.addEventListener === "function") {
 }
 
 // ---------- Game state ----------
-const VERSION = "1.5.0"; // bump alongside the sw.js cache when shipping
+const VERSION = "1.5.1"; // bump alongside the sw.js cache when shipping
 
 // The arena is a fixed-size world, independent of screen size; a camera
 // follows the player and clamps at the world border. Screens larger than
@@ -465,6 +466,7 @@ const UPGRADES = [
 ];
 let upgradeChoices = [];
 let hoveredCard = -1;
+let selectedCard = -1; // augment picks need a confirm tap so a stray end-of-wave click can't choose
 const taken = {}; // count per id
 
 function rollUpgrades() {
@@ -476,11 +478,18 @@ function rollUpgrades() {
     return true;
   });
   upgradeChoices = [];
+  selectedCard = -1;
   const copy = pool.slice();
   for (let i = 0; i < 3 && copy.length; i++) {
     const idx = Math.floor(Math.random() * copy.length);
     upgradeChoices.push(copy.splice(idx, 1)[0]);
   }
+}
+
+function selectCard(i) {
+  if (!upgradeChoices[i] || selectedCard === i) return;
+  selectedCard = i;
+  Sound.tone(440, 0.06, "square", 0.05, 520);
 }
 
 function chooseUpgrade(i) {
@@ -822,9 +831,14 @@ function handleKeyPress(code) {
     if ((code === "Enter" || code === "KeyR") && gameOverT > 0.8) { startGame(); return; }
   }
   if (state === "upgrade") {
-    if (code === "Digit1") chooseUpgrade(0);
-    if (code === "Digit2") chooseUpgrade(1);
-    if (code === "Digit3") chooseUpgrade(2);
+    // digit selects; the same digit again (or Enter) confirms
+    const m = /^Digit([123])$/.exec(code);
+    if (m) {
+      const i = +m[1] - 1;
+      if (selectedCard === i) chooseUpgrade(i);
+      else selectCard(i);
+    }
+    if (code === "Enter" && selectedCard >= 0) chooseUpgrade(selectedCard);
     return;
   }
   if (state === "play") {
@@ -859,7 +873,11 @@ function handleClick() {
     if (gameOverT > 0.8) startGame();
     return;
   }
-  if (state === "upgrade" && hoveredCard >= 0) chooseUpgrade(hoveredCard);
+  if (state === "upgrade") {
+    if (selectedCard >= 0 && inRect(mouse.x, mouse.y, confirmBtnRect())) { chooseUpgrade(selectedCard); return; }
+    if (hoveredCard >= 0) selectCard(hoveredCard);
+    return;
+  }
   if (state === "play" && introPopup && introPopup.t > 0.35) introPopup = null;
 }
 
@@ -2801,12 +2819,17 @@ function drawEnemyIntro() {
 
 function upgradeCardRects() {
   // shared by rendering, mouse hover, and touch hit-testing
-  const cw = Math.min(230, W / 3.6), ch = Math.min(200, H * 0.52);
+  // (0.46 leaves room for the confirm button on short phone screens)
+  const cw = Math.min(230, W / 3.6), ch = Math.min(200, H * 0.46);
   const gap = 26;
   const totalW = upgradeChoices.length * cw + (upgradeChoices.length - 1) * gap;
   const x0 = W / 2 - totalW / 2;
   const y0 = H * 0.34;
   return upgradeChoices.map((u, i) => ({ x: x0 + i * (cw + gap), y: y0, w: cw, h: ch }));
+}
+
+function confirmBtnRect() {
+  return { x: W / 2 - 110, y: H - 52 - SAFE.b, w: 220, h: 40 };
 }
 
 function drawUpgradeScreen() {
@@ -2822,7 +2845,7 @@ function drawUpgradeScreen() {
   ctx.shadowBlur = 0;
   ctx.font = "bold 15px 'Courier New', monospace";
   ctx.fillStyle = "#8aa8c8";
-  ctx.fillText(TOUCH.active ? "tap an augment" : "choose an augment", W / 2, H * 0.2 + 30);
+  ctx.fillText(TOUCH.active ? "tap an augment, then confirm" : "select with click or 1/2/3, confirm with ENTER", W / 2, H * 0.2 + 30);
 
   const rects = upgradeCardRects();
   hoveredCard = -1;
@@ -2831,14 +2854,16 @@ function drawUpgradeScreen() {
     const { x, y: y0, w: cw, h: ch } = rects[i];
     const hov = !TOUCH.active && mouse.x >= x && mouse.x <= x + cw && mouse.y >= y0 && mouse.y <= y0 + ch;
     if (hov) hoveredCard = i;
-    const lift = hov ? -8 : 0;
+    const sel = selectedCard === i;
+    const hot = hov || sel;
+    const lift = sel ? -10 : hov ? -8 : 0;
 
     ctx.save();
     ctx.translate(x, y0 + lift);
-    neon(hov ? "#ffe066" : "#7df9ff", hov ? 18 : 8);
-    ctx.fillStyle = hov ? "rgba(20,26,46,0.95)" : "rgba(10,14,28,0.95)";
-    ctx.strokeStyle = hov ? "#ffe066" : "#3a6f8a";
-    ctx.lineWidth = 2;
+    neon(hot ? "#ffe066" : "#7df9ff", sel ? 24 : hov ? 18 : 8);
+    ctx.fillStyle = hot ? "rgba(20,26,46,0.95)" : "rgba(10,14,28,0.95)";
+    ctx.strokeStyle = hot ? "#ffe066" : "#3a6f8a";
+    ctx.lineWidth = sel ? 3 : 2;
     roundRect(0, 0, cw, ch, 10);
     ctx.fill();
     ctx.stroke();
@@ -2846,7 +2871,7 @@ function drawUpgradeScreen() {
 
     ctx.textAlign = "center";
     ctx.font = "44px 'Courier New', monospace";
-    ctx.fillStyle = hov ? "#ffe066" : "#7df9ff";
+    ctx.fillStyle = hot ? "#ffe066" : "#7df9ff";
     ctx.fillText(u.icon, cw / 2, 64);
 
     ctx.font = "bold 16px 'Courier New', monospace";
@@ -2865,12 +2890,33 @@ function drawUpgradeScreen() {
     }
 
     ctx.font = "bold 13px 'Courier New', monospace";
-    ctx.fillStyle = hov ? "#ffe066" : "#3a6f8a";
-    ctx.fillText(TOUCH.active ? "[ TAP ]" : "[ " + (i + 1) + " ]", cw / 2, ch - 12);
+    ctx.fillStyle = hot ? "#ffe066" : "#3a6f8a";
+    ctx.fillText(sel ? "SELECTED" : TOUCH.active ? "[ TAP ]" : "[ " + (i + 1) + " ]", cw / 2, ch - 12);
     ctx.restore();
   });
 
-  canvas.style.cursor = hoveredCard >= 0 ? "pointer" : "crosshair";
+  if (selectedCard >= 0) {
+    const r = confirmBtnRect();
+    const hovOk = !TOUCH.active && inRect(mouse.x, mouse.y, r);
+    const pulse = 0.75 + 0.25 * Math.sin(time * 6);
+    ctx.save();
+    neon("#27e8a7", hovOk ? 22 : 14 * pulse);
+    ctx.fillStyle = hovOk ? "rgba(18,40,34,0.95)" : "rgba(8,22,18,0.95)";
+    ctx.strokeStyle = "#27e8a7";
+    ctx.lineWidth = 2;
+    roundRect(r.x, r.y, r.w, r.h, 8);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.textAlign = "center";
+    ctx.font = "bold 16px 'Courier New', monospace";
+    ctx.fillStyle = "#27e8a7";
+    ctx.fillText(TOUCH.active ? "✓ CONFIRM" : "✓ CONFIRM  [ENTER]", r.x + r.w / 2, r.y + 26);
+    ctx.restore();
+    if (hovOk) hoveredCard = -2; // pointer cursor over the button, but not a card select
+  }
+
+  canvas.style.cursor = hoveredCard >= 0 || hoveredCard === -2 ? "pointer" : "crosshair";
   ctx.restore();
 }
 

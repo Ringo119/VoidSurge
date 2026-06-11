@@ -100,6 +100,8 @@ frames(5);
 check("upgrade screen after clear", get("state") === "upgrade");
 check("3 choices offered", get("upgradeChoices.length") === 3);
 key("Digit1");
+check("digit selects a card without applying", get("state") === "upgrade" && get("selectedCard") === 0);
+key("Digit1"); // same digit again confirms
 check("upgrade applied, wave 2 begins", get("state") === "play" && get("wave") === 2);
 
 // fast-forward to boss wave 5 by clearing waves
@@ -107,7 +109,8 @@ for (let w = 2; w < 5; w++) {
   frames(120);
   run("enemies.length = 0; spawnQueue.length = 0; boss = null;");
   frames(5);
-  key("Digit" + ((w % 3) + 1));
+  key("Digit" + ((w % 3) + 1)); // select…
+  key("Digit" + ((w % 3) + 1)); // …and confirm
 }
 check("reached wave 5 (boss)", get("wave") === 5);
 frames(200); // boss spawns after delay
@@ -190,7 +193,10 @@ check("upgrade screen for touch test", get("state") === "upgrade");
 const beforeWave = get("wave");
 touch("touchstart", [{ identifier: 6, clientX: 384, clientY: 345 }]); // card 1 center at 1280x720
 touch("touchend",   [{ identifier: 6, clientX: 384, clientY: 345 }]);
-check("tap picks upgrade", get("state") === "play" && get("wave") === beforeWave + 1);
+check("tap selects but doesn't apply", get("state") === "upgrade" && get("selectedCard") === 0);
+touch("touchstart", [{ identifier: 6, clientX: 640, clientY: 688 }]); // CONFIRM button
+touch("touchend",   [{ identifier: 6, clientX: 640, clientY: 688 }]);
+check("confirm tap picks upgrade", get("state") === "play" && get("wave") === beforeWave + 1);
 
 // death -> tap to restart
 run("player.shield = 0; player.invuln = 0; player.dashing = 0; damagePlayer(99999);");
