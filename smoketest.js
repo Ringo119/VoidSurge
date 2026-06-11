@@ -415,4 +415,35 @@ check("landscape restores unrotated", get("ROT") === false && get("W") === 1280 
 frames(30);
 check("rotation frames run clean", true);
 
+// ---- fixed world + follow camera ----
+check("world is larger than the screen", get("WORLD.w") > 1280 && get("WORLD.h") > 720);
+key("KeyD", "keyup"); // release the move key held since the core-loop section
+run("startGame();");
+run("enemies.length = 0; spawnQueue.length = 0; waveActive = false; boss = null;");
+check("player starts at world center",
+  get("player.x") === get("WORLD.w / 2") && get("player.y") === get("WORLD.h / 2"));
+check("camera snaps to the player on run start",
+  Math.abs(get("cam.x - clamp(player.x - W / 2, 0, WORLD.w - W)")) < 1 &&
+  Math.abs(get("cam.y - clamp(player.y - H / 2, 0, WORLD.h - H)")) < 1);
+
+run("player.x = WORLD.w - 50; player.y = WORLD.h - 50; player.vx = 0; player.vy = 0;");
+frames(120);
+check("player can roam beyond the screen", get("player.x") > 1280);
+check("camera follows and clamps at the far world border",
+  Math.abs(get("cam.x - (WORLD.w - W)")) < 2 && Math.abs(get("cam.y - (WORLD.h - H)")) < 2);
+
+run("player.x = 30; player.y = 30; player.vx = 0; player.vy = 0;");
+frames(120);
+check("camera clamps at the origin corner", get("cam.x") < 2 && get("cam.y") < 2);
+
+run("player.x = 30; player.vx = -2000;");
+frames(5);
+check("world border still blocks the player", get("player.x") >= get("player.r"));
+
+// spawns land near the camera view and inside the world
+check("edge spawns stay inside the world",
+  get("(() => { for (let i = 0; i < 200; i++) { const [x, y] = edgeSpawnPos(); if (x < 0 || x > WORLD.w || y < 0 || y > WORLD.h) return false; } return true; })()"));
+frames(60);
+check("camera frames run clean", true);
+
 console.log(`\n${pass} checks passed — VOIDSURGE smoke test complete.`);

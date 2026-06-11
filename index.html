@@ -300,7 +300,22 @@ if (typeof document.addEventListener === "function") {
 }
 
 // ---------- Game state ----------
-const VERSION = "1.4.1"; // bump alongside the sw.js cache when shipping
+const VERSION = "1.5.0"; // bump alongside the sw.js cache when shipping
+
+// The arena is a fixed-size world, independent of screen size; a camera
+// follows the player and clamps at the world border. Screens larger than
+// the world per axis just center it.
+const WORLD = { w: 1600, h: 900 };
+const cam = { x: 0, y: 0 };
+function updateCamera(dt) {
+  const tx = W >= WORLD.w ? (WORLD.w - W) / 2 : clamp(player.x - W / 2, 0, WORLD.w - W);
+  const ty = H >= WORLD.h ? (WORLD.h - H) / 2 : clamp(player.y - H / 2, 0, WORLD.h - H);
+  if (dt === null) { cam.x = tx; cam.y = ty; return; } // snap (run start)
+  const k = 1 - Math.pow(0.002, dt);
+  cam.x += (tx - cam.x) * k;
+  cam.y += (ty - cam.y) * k;
+}
+
 let state = "title";          // title | play | upgrade | over
 let paused = false;
 let wave = 0;
@@ -420,7 +435,7 @@ const player = {
 
 function resetPlayer() {
   Object.assign(player, {
-    x: W / 2, y: H / 2, vx: 0, vy: 0, angle: 0,
+    x: WORLD.w / 2, y: WORLD.h / 2, vx: 0, vy: 0, angle: 0,
     hp: 100, maxHp: 100, speed: 270,
     fireDelay: 0.22, fireT: 0,
     bulletDmg: 10, bulletSpeed: 620, bulletCount: 1, spread: 0.09,
@@ -429,6 +444,7 @@ function resetPlayer() {
     shield: 0, maxShield: 0, magnet: 110, trailT: 0,
   });
   drones = [];
+  updateCamera(null);
 }
 
 // ---------- Upgrades ----------
@@ -544,12 +560,16 @@ function spawnEnemy(type, x, y, scale = 1) {
 }
 
 function edgeSpawnPos() {
+  // just outside the camera's view so spawns stay near the action,
+  // clamped into the world when the view butts against the border
   const m = 40;
   const side = randInt(0, 3);
-  if (side === 0) return [rand(-m, W + m), -m];
-  if (side === 1) return [rand(-m, W + m), H + m];
-  if (side === 2) return [-m, rand(-m, H + m)];
-  return [W + m, rand(-m, H + m)];
+  let x, y;
+  if (side === 0)      { x = rand(cam.x - m, cam.x + W + m); y = cam.y - m; }
+  else if (side === 1) { x = rand(cam.x - m, cam.x + W + m); y = cam.y + H + m; }
+  else if (side === 2) { x = cam.x - m; y = rand(cam.y - m, cam.y + H + m); }
+  else                 { x = cam.x + W + m; y = rand(cam.y - m, cam.y + H + m); }
+  return [clamp(x, 20, WORLD.w - 20), clamp(y, 20, WORLD.h - 20)];
 }
 
 // ---------- Waves ----------
@@ -651,11 +671,11 @@ function spawnBoss(scale) {
     charging: 0, chargeAngle: 0, hitFlash: 0, spawnT: 1, minionT: 8,
     chargesLeft: 0, shieldT: 8, shielded: 0,                        // harbinger
     coreT: 4, coreOpen: 0, broodT: 3,                               // mother
-    edgeA: Math.atan2(y - H / 2, x - W / 2), edgeDir: Math.random() < 0.5 ? 1 : -1, edgeT: rand(4, 8),
+    edgeA: Math.atan2(y - WORLD.h / 2, x - WORLD.w / 2), edgeDir: Math.random() < 0.5 ? 1 : -1, edgeT: rand(4, 8),
     scale, mod: mod ? mod.id : null, modName: mod ? mod.name : null,
   };
   if (mod) {
-    spawnText(W / 2, H * 0.42, mod.name + " — " + mod.desc, def.color, 18);
+    spawnText(cam.x + W / 2, cam.y + H * 0.42, mod.name + " — " + mod.desc, def.color, 18);
     toast(def.name + " MODIFIER: " + mod.name);
   }
   maybeBrief(id);
@@ -889,6 +909,7 @@ function update(dt) {
   if (introPopup) { introPopup.t += dt; return; } // new-hostile briefing freezes play
 
   updatePlayer(dt);
+  updateCamera(dt);
   updateDrones(dt);
   updateSpawns(dt);
   updateEnemies(dt);
@@ -914,7 +935,7 @@ function update(dt) {
     if (!damagedThisWave && wave >= 5) unlock("ghost");
     saveStats();
     score += wave * 25;
-    spawnText(W / 2, H / 2 - 60, "WAVE CLEAR  +" + (wave * 25), "#7df9ff", 22);
+    spawnText(cam.x + W / 2, cam.y + H / 2 - 60, "WAVE CLEAR  +" + (wave * 25), "#7df9ff", 22);
     setTimeout(() => {}, 0);
     rollUpgrades();
     state = "upgrade";
@@ -948,11 +969,11 @@ function updatePlayer(dt) {
     player.vx = approach(player.vx, dx * player.speed, accel * dt);
     player.vy = approach(player.vy, dy * player.speed, accel * dt);
   }
-  player.x = clamp(player.x + player.vx * dt, player.r, W - player.r);
-  player.y = clamp(player.y + player.vy * dt, player.r, H - player.r);
+  player.x = clamp(player.x + player.vx * dt, player.r, WORLD.w - player.r);
+  player.y = clamp(player.y + player.vy * dt, player.r, WORLD.h - player.r);
   const aimActive = TOUCH.aim.id !== null && TOUCH.aim.mag > TOUCH.dead;
   if (aimActive) player.angle = Math.atan2(TOUCH.aim.dy, TOUCH.aim.dx);
-  else if (!TOUCH.active) player.angle = angleTo(player.x, player.y, mouse.x, mouse.y);
+  else if (!TOUCH.active) player.angle = angleTo(player.x, player.y, mouse.x + cam.x, mouse.y + cam.y);
   // on touch with the aim stick released, keep the last facing
 
   if (player.dashT > 0) player.dashT -= dt;
@@ -1124,8 +1145,8 @@ function updateEnemies(dt) {
         e.x += Math.cos(a) * e.speed * dt;
         e.y += Math.sin(a) * e.speed * dt;
         e.angle = a;
-        if (e.x < 16 || e.x > W - 16) { e.baseA = Math.PI - e.baseA; e.x = clamp(e.x, 16, W - 16); }
-        if (e.y < 16 || e.y > H - 16) { e.baseA = -e.baseA; e.y = clamp(e.y, 16, H - 16); }
+        if (e.x < 16 || e.x > WORLD.w - 16) { e.baseA = Math.PI - e.baseA; e.x = clamp(e.x, 16, WORLD.w - 16); }
+        if (e.y < 16 || e.y > WORLD.h - 16) { e.baseA = -e.baseA; e.y = clamp(e.y, 16, WORLD.h - 16); }
         e.fireT -= dt;
         if (e.fireT <= 0) {
           e.fireT = 0.07;
@@ -1138,8 +1159,8 @@ function updateEnemies(dt) {
           e.cloaked -= dt;
           if (e.cloaked <= 0) {
             const a = rand(0, TAU);
-            e.x = clamp(player.x + Math.cos(a) * 170, 30, W - 30);
-            e.y = clamp(player.y + Math.sin(a) * 170, 30, H - 30);
+            e.x = clamp(player.x + Math.cos(a) * 170, 30, WORLD.w - 30);
+            e.y = clamp(player.y + Math.sin(a) * 170, 30, WORLD.h - 30);
             e.spawnT = 0.4; // re-entry telegraph
             e.visT = rand(2.2, 3.2);
             e.lungeT = 0.55; e.lunging = 0;
@@ -1170,8 +1191,8 @@ function updateEnemies(dt) {
       case "minelayer": { // keeps range and seeds proximity mines
         const d = Math.sqrt(dist2(e.x, e.y, player.x, player.y));
         const dir = d < 340 ? -1 : d > 460 ? 1 : 0;
-        e.x = clamp(e.x + Math.cos(aToP) * e.speed * dir * dt, 20, W - 20);
-        e.y = clamp(e.y + Math.sin(aToP) * e.speed * dir * dt, 20, H - 20);
+        e.x = clamp(e.x + Math.cos(aToP) * e.speed * dir * dt, 20, WORLD.w - 20);
+        e.y = clamp(e.y + Math.sin(aToP) * e.speed * dir * dt, 20, WORLD.h - 20);
         e.angle = aToP;
         e.fireT -= dt;
         if (e.fireT <= 0) {
@@ -1239,8 +1260,8 @@ function harbingerCharge(b) {
     // blink to the player's flank before winding up
     spawnParticles(b.x, b.y, b.color, 30, 280, 0.6, 4);
     const a = rand(0, TAU);
-    b.x = clamp(player.x + Math.cos(a) * 300, 70, W - 70);
-    b.y = clamp(player.y + Math.sin(a) * 300, 70, H - 70);
+    b.x = clamp(player.x + Math.cos(a) * 300, 70, WORLD.w - 70);
+    b.y = clamp(player.y + Math.sin(a) * 300, 70, WORLD.h - 70);
     spawnParticles(b.x, b.y, b.color, 30, 280, 0.6, 4);
     Sound.dash();
   }
@@ -1284,8 +1305,8 @@ function updateHarbinger(b, dt) {
     b.x += Math.cos(aToP) * b.speed * spd * dt;
     b.y += Math.sin(aToP) * b.speed * spd * dt;
   }
-  b.x = clamp(b.x, -80, W + 80);
-  b.y = clamp(b.y, -80, H + 80);
+  b.x = clamp(b.x, -80, WORLD.w + 80);
+  b.y = clamp(b.y, -80, WORLD.h + 80);
 
   // attacks
   b.fireT -= dt;
@@ -1340,8 +1361,8 @@ function updateMother(b, dt) {
   b.edgeT -= dt;
   if (b.edgeT <= 0) { b.edgeT = rand(4, 8); b.edgeDir *= -1; }
   b.edgeA += b.edgeDir * 0.16 * dt;
-  const tx = W / 2 + Math.cos(b.edgeA) * (W / 2 - 90);
-  const ty = H / 2 + Math.sin(b.edgeA) * (H / 2 - 80);
+  const tx = WORLD.w / 2 + Math.cos(b.edgeA) * (WORLD.w / 2 - 90);
+  const ty = WORLD.h / 2 + Math.sin(b.edgeA) * (WORLD.h / 2 - 80);
   b.x += (tx - b.x) * Math.min(1, dt * 1.2);
   b.y += (ty - b.y) * Math.min(1, dt * 1.2);
 
@@ -1396,7 +1417,7 @@ function updateBullets(dt) {
     const b = bullets[i];
     b.x += b.vx * dt; b.y += b.vy * dt;
     b.life -= dt;
-    if (b.life <= 0 || b.x < -20 || b.x > W + 20 || b.y < -20 || b.y > H + 20) {
+    if (b.life <= 0 || b.x < -20 || b.x > WORLD.w + 20 || b.y < -20 || b.y > WORLD.h + 20) {
       bullets.splice(i, 1); continue;
     }
     let consumed = false;
@@ -1455,7 +1476,7 @@ function updateBullets(dt) {
           const pts = boss.score * combo;
           score += pts;
           spawnText(boss.x, boss.y, "+" + pts, "#ffe066", 24);
-          spawnText(W / 2, H / 2 - 90, BOSSES[boss.id].name + " DESTROYED", boss.color, 26);
+          spawnText(cam.x + W / 2, cam.y + H / 2 - 90, BOSSES[boss.id].name + " DESTROYED", boss.color, 26);
           spawnPickup(boss.x - 20, boss.y, "heal");
           spawnPickup(boss.x + 20, boss.y, "gem");
           spawnPickup(boss.x, boss.y + 20, "gem");
@@ -1498,7 +1519,7 @@ function updateEnemyBullets(dt) {
     }
     b.x += b.vx * dt; b.y += b.vy * dt;
     b.life -= dt;
-    if (b.life <= 0 || b.x < -20 || b.x > W + 20 || b.y < -20 || b.y > H + 20) {
+    if (b.life <= 0 || b.x < -20 || b.x > WORLD.w + 20 || b.y < -20 || b.y > WORLD.h + 20) {
       enemyBullets.splice(i, 1); continue;
     }
     if (dist2(b.x, b.y, player.x, player.y) < (b.r + player.r - 3) * (b.r + player.r - 3)) {
@@ -1577,9 +1598,9 @@ function render() {
   }
 
   drawStars();
-  drawGrid();
 
   if (state === "title" || state === "scores" || state === "stats" || state === "ships" || state === "settings") {
+    drawGrid();
     if (state === "title") drawTitle();
     else if (state === "scores") drawScores();
     else if (state === "stats") drawStats();
@@ -1591,6 +1612,10 @@ function render() {
     return;
   }
 
+  // world-space pass, offset by the camera
+  ctx.save();
+  ctx.translate(-cam.x, -cam.y);
+  drawArena();
   drawPickups();
   drawEnemies();
   drawBoss();
@@ -1600,6 +1625,10 @@ function render() {
   drawEnemyBullets();
   drawParticles();
   drawTexts();
+  ctx.restore();
+
+  // screen-space pass
+  drawOffscreenPings();
   drawHUD();
   drawTouchControls();
   drawToasts();
@@ -1621,12 +1650,60 @@ function drawStars() {
   ctx.save();
   for (const s of stars) {
     const tw = 0.5 + 0.5 * Math.sin(time * 2 + s.tw);
-    const px = (s.x * W + (state === "play" ? -player.x * 0.02 * s.z : 0) + W) % W;
-    const py = (s.y * H + (state === "play" ? -player.y * 0.02 * s.z : 0) + H) % H;
+    const par = 0.15 + 0.4 * s.z; // deeper stars scroll slower as the camera moves
+    const px = ((s.x * W - cam.x * par) % W + W) % W;
+    const py = ((s.y * H - cam.y * par) % H + H) % H;
     ctx.globalAlpha = 0.25 + 0.55 * s.z * tw;
     ctx.fillStyle = s.z > 0.7 ? "#bfe8ff" : "#5f7fa8";
     const sz = s.z * 2;
     ctx.fillRect(px, py, sz, sz);
+  }
+  ctx.restore();
+}
+
+// world-space backdrop: grid over the visible slice of the arena + its border
+function drawArena() {
+  ctx.save();
+  ctx.globalAlpha = 0.05;
+  ctx.strokeStyle = "#3fa9ff";
+  ctx.lineWidth = 1;
+  const gs = 60;
+  const x0 = Math.max(0, Math.floor(cam.x / gs) * gs), x1 = Math.min(WORLD.w, cam.x + W);
+  const y0 = Math.max(0, Math.floor(cam.y / gs) * gs), y1 = Math.min(WORLD.h, cam.y + H);
+  ctx.beginPath();
+  for (let x = x0; x <= x1; x += gs) { ctx.moveTo(x, Math.max(0, cam.y)); ctx.lineTo(x, y1); }
+  for (let y = y0; y <= y1; y += gs) { ctx.moveTo(Math.max(0, cam.x), y); ctx.lineTo(x1, y); }
+  ctx.stroke();
+  ctx.globalAlpha = 0.4;
+  ctx.lineWidth = 2;
+  neon("#3fa9ff", 16);
+  ctx.strokeRect(0, 0, WORLD.w, WORLD.h);
+  ctx.restore();
+}
+
+// edge markers for hostiles outside the camera's view
+function drawOffscreenPings() {
+  if (state !== "play") return;
+  ctx.save();
+  const list = boss ? enemies.concat(boss) : enemies;
+  for (const e of list) {
+    if (e.cloaked > 0 || e.spawnT > 0) continue;
+    const sx = e.x - cam.x, sy = e.y - cam.y;
+    if (sx > -e.r && sx < W + e.r && sy > -e.r && sy < H + e.r) continue;
+    const px = clamp(sx, 18 + SAFE.l, W - 18 - SAFE.r);
+    const py = clamp(sy, 30 + SAFE.t, H - 30 - SAFE.b);
+    const a = Math.atan2(sy - py, sx - px);
+    const s = e === boss ? 9 : 5.5;
+    ctx.globalAlpha = e === boss ? 0.9 : 0.6;
+    ctx.fillStyle = e.color;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(a);
+    ctx.beginPath();
+    ctx.moveTo(s, 0); ctx.lineTo(-s * 0.7, s * 0.6); ctx.lineTo(-s * 0.7, -s * 0.6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
   ctx.restore();
 }
