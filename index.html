@@ -219,6 +219,7 @@ function onTouchStart(e) {
     }
     if (state === "scores" || state === "stats") { state = "title"; return; }
     if (state === "ships") { if (!shipCardAction(x, y)) state = "title"; return; }
+    if (state === "settings") { if (!settingAction(x, y)) state = "title"; return; }
     if (state === "over") {
       if (gameOverT > 0.4 && inRect(x, y, overMenuRect())) state = "title";
       else if (gameOverT > 0.8) startGame();
@@ -233,6 +234,7 @@ function onTouchStart(e) {
       continue;
     }
     // state === "play"
+    if (introPopup) { if (introPopup.t > 0.35) introPopup = null; continue; }
     if (paused) { paused = false; continue; }
     if (inCircle(x, y, pauseBtn())) { paused = true; releaseAllTouches(); continue; }
     if (inCircle(x, y, muteBtn())) { Sound.muted = !Sound.muted; continue; }
@@ -348,12 +350,26 @@ function unlock(id) {
   Sound.upgrade();
 }
 
+// ---------- Settings (persistent) ----------
+const settings = Object.assign({ enemyIntros: true }, loadJSON("voidsurge_settings", {}));
+const SETTING_DEFS = [
+  { id: "enemyIntros", name: "ENEMY INTEL POPUPS",
+    desc: "pause and brief you on each new enemy type the first time it appears in a run" },
+];
+function toggleSetting(id) {
+  settings[id] = !settings[id];
+  saveJSON("voidsurge_settings", settings);
+  Sound.pickup();
+}
+
 // run-scoped meta state
 let lastRunRank = -1;     // where the run that just ended landed on the board
 let ghostWave = 0;        // wave where your best run died
 let ghostNoteT = 0;
 let recordBroken = false;
 let damagedThisWave = false;
+let introPopup = null;    // { type, t } — freezes play while a new hostile is briefed
+let seenThisRun = {};     // enemy types already introduced this run
 
 // ---------- Stars (parallax background) ----------
 const stars = [];
@@ -440,16 +456,42 @@ function chooseUpgrade(i) {
 }
 
 // ---------- Enemies ----------
+// intro = first wave the type can spawn on; cost/weight feed the wave budget roll
 const ENEMY_TYPES = {
-  drifter: { r: 15, hp: 20, speed: 70,  dmg: 12, score: 10, color: "#ff3d6e" },
-  darter:  { r: 10, hp: 10, speed: 150, dmg: 8,  score: 15, color: "#ffaa00" },
-  sentry:  { r: 14, hp: 28, speed: 55,  dmg: 10, score: 25, color: "#b14dff" },
-  titan:   { r: 28, hp: 90, speed: 38,  dmg: 20, score: 50, color: "#ff5e3a" },
-  orbiter: { r: 11, hp: 18, speed: 120, dmg: 9,  score: 20, color: "#27e8a7" },
+  drifter: { r: 15, hp: 20, speed: 70,  dmg: 12, score: 10, color: "#ff3d6e", intro: 1, cost: 1,   weight: 1,
+             name: "DRIFTER", desc: "homes in on your ship. slow, fragile, and never alone." },
+  darter:  { r: 10, hp: 10, speed: 150, dmg: 8,  score: 15, color: "#ffaa00", intro: 2, cost: 1.2, weight: 1,
+             name: "DARTER", desc: "winds up, then lunges in a blistering straight dash. step aside and punish it." },
+  sentry:  { r: 14, hp: 28, speed: 55,  dmg: 10, score: 25, color: "#b14dff", intro: 3, cost: 2,   weight: 0.8,
+             name: "SENTRY", desc: "holds its range and fires aimed plasma bolts. close the gap or strafe the shots." },
+  titan:   { r: 28, hp: 90, speed: 38,  dmg: 20, score: 50, color: "#ff5e3a", intro: 6, cost: 4,   weight: 0.5,
+             name: "TITAN", desc: "heavily armored bruiser. splits into three drifters when destroyed." },
+  orbiter: { r: 11, hp: 18, speed: 120, dmg: 9,  score: 20, color: "#27e8a7", intro: 4, cost: 1.8, weight: 0.8,
+             name: "ORBITER", desc: "circles your position, peppering you from the flank. watch your sides." },
 };
+
+// Guarantee: at most one new enemy type debuts per wave, and never on a boss
+// wave (where the budget roll doesn't run). Later declarations get bumped to
+// the next free wave, so newly added types can't pile onto an existing intro.
+(function spaceOutIntros() {
+  const used = {};
+  for (const k in ENEMY_TYPES) {
+    const t = ENEMY_TYPES[k];
+    while (used[t.intro] || t.intro % 5 === 0) t.intro++;
+    used[t.intro] = true;
+  }
+})();
 
 function spawnEnemy(type, x, y, scale = 1) {
   const t = ENEMY_TYPES[type];
+  if (!seenThisRun[type]) {
+    seenThisRun[type] = true;
+    if (settings.enemyIntros && state === "play") {
+      introPopup = { type, t: 0 };
+      releaseAllTouches();
+      Sound.tone(180, 0.3, "sawtooth", 0.12, 90);
+    }
+  }
   enemies.push({
     type, x, y, r: t.r,
     hp: t.hp * scale, maxHp: t.hp * scale,
@@ -506,13 +548,10 @@ function startWave(n) {
     const budget = 5 + n * 2.4;
     const scale = 1 + n * 0.055;
     let b = budget, d = 0.4;
-    const weights = [
-      ["drifter", 1, 1],
-      ["darter", 1.2, n >= 2 ? 1 : 0],
-      ["sentry", 2, n >= 3 ? 0.8 : 0],
-      ["orbiter", 1.8, n >= 4 ? 0.8 : 0],
-      ["titan", 4, n >= 6 ? 0.5 : 0],
-    ];
+    const weights = Object.keys(ENEMY_TYPES).map(k => {
+      const t = ENEMY_TYPES[k];
+      return [k, t.cost, n >= t.intro ? t.weight : 0];
+    });
     const totalW = weights.reduce((s, w) => s + w[2], 0);
     while (b > 0) {
       let r = Math.random() * totalW, chosen = weights[0];
@@ -633,6 +672,8 @@ function startGame() {
   ghostWave = scores.length ? scores[0].w : 0;
   recordBroken = false;
   lastRunRank = -1;
+  introPopup = null;
+  seenThisRun = {};
   score = 0; combo = 1; comboTimer = 0;
   bullets = []; enemyBullets = []; enemies = []; particles = []; pickups = []; texts = []; drones = [];
   boss = null;
@@ -648,12 +689,17 @@ function handleKeyPress(code) {
     if (code === "KeyH") { state = "scores"; return; }
     if (code === "KeyS") { state = "stats"; return; }
     if (code === "KeyC") { state = "ships"; return; }
+    if (code === "KeyO") { state = "settings"; return; }
   }
-  if (state === "scores" || state === "stats" || state === "ships") {
+  if (state === "scores" || state === "stats" || state === "ships" || state === "settings") {
     if (code === "Escape" || code === "KeyB") { state = "title"; return; }
     if (state === "ships") {
       const m = /^Digit([1-8])$/.exec(code);
       if (m && SKINS[+m[1] - 1]) selectSkin(SKINS[+m[1] - 1].id);
+    }
+    if (state === "settings") {
+      const m = /^Digit([1-9])$/.exec(code);
+      if (m && SETTING_DEFS[+m[1] - 1]) toggleSetting(SETTING_DEFS[+m[1] - 1].id);
     }
     return;
   }
@@ -668,6 +714,11 @@ function handleKeyPress(code) {
     return;
   }
   if (state === "play") {
+    if (introPopup) {
+      // any non-movement key dismisses the briefing (held move keys repeat keydown)
+      if (introPopup.t > 0.35 && !/^(Key[WASD]|Arrow)/.test(code)) introPopup = null;
+      return;
+    }
     if (code === "KeyP" || code === "Escape") paused = !paused;
     if (code === "Space" && !paused) tryDash();
   }
@@ -685,12 +736,17 @@ function handleClick() {
     if (!shipCardAction(mouse.x, mouse.y)) state = "title";
     return;
   }
+  if (state === "settings") {
+    if (!settingAction(mouse.x, mouse.y)) state = "title";
+    return;
+  }
   if (state === "over") {
     if (gameOverT > 0.4 && inRect(mouse.x, mouse.y, overMenuRect())) { state = "title"; return; }
     if (gameOverT > 0.8) startGame();
     return;
   }
   if (state === "upgrade" && hoveredCard >= 0) chooseUpgrade(hoveredCard);
+  if (state === "play" && introPopup && introPopup.t > 0.35) introPopup = null;
 }
 
 function tryDash() {
@@ -736,6 +792,7 @@ function update(dt) {
 
   if (state === "over") { gameOverT += dt; return; }
   if (state !== "play" || paused) return;
+  if (introPopup) { introPopup.t += dt; return; } // new-hostile briefing freezes play
 
   updatePlayer(dt);
   updateDrones(dt);
@@ -1189,10 +1246,11 @@ function render() {
   drawStars();
   drawGrid();
 
-  if (state === "title" || state === "scores" || state === "stats" || state === "ships") {
+  if (state === "title" || state === "scores" || state === "stats" || state === "ships" || state === "settings") {
     if (state === "title") drawTitle();
     else if (state === "scores") drawScores();
     else if (state === "stats") drawStats();
+    else if (state === "settings") drawSettings();
     else drawShips();
     drawParticles();
     drawToasts();
@@ -1215,6 +1273,7 @@ function render() {
 
   if (state === "upgrade") drawUpgradeScreen();
   if (state === "over") drawGameOver();
+  if (introPopup && state === "play") drawEnemyIntro();
   if (paused && state === "play") drawPaused();
 
   // damage flash
@@ -1382,61 +1441,11 @@ function drawEnemies() {
     ctx.fillStyle = flash ? "rgba(255,255,255,0.5)" : shade(e.color);
     ctx.lineWidth = 2;
     ctx.beginPath();
-
-    switch (e.type) {
-      case "drifter": { // pentagon blob
-        for (let i = 0; i < 5; i++) {
-          const a = TAU * i / 5 + e.wobble * 0.15;
-          const r = e.r * (0.85 + 0.15 * Math.sin(e.wobble + i * 2));
-          const x = Math.cos(a) * r, y = Math.sin(a) * r;
-          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-        }
-        break;
-      }
-      case "darter": { // arrow
-        ctx.moveTo(e.r * 1.4, 0);
-        ctx.lineTo(-e.r, -e.r * 0.9);
-        ctx.lineTo(-e.r * 0.4, 0);
-        ctx.lineTo(-e.r, e.r * 0.9);
-        break;
-      }
-      case "sentry": { // diamond w/ inner eye
-        ctx.moveTo(e.r, 0); ctx.lineTo(0, -e.r); ctx.lineTo(-e.r, 0); ctx.lineTo(0, e.r);
-        break;
-      }
-      case "orbiter": { // triangle
-        for (let i = 0; i < 3; i++) {
-          const a = TAU * i / 3 + e.wobble;
-          const x = Math.cos(a) * e.r, y = Math.sin(a) * e.r;
-          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-        }
-        break;
-      }
-      case "titan": { // heavy hexagon
-        for (let i = 0; i < 6; i++) {
-          const a = TAU * i / 6 + e.wobble * 0.1;
-          const x = Math.cos(a) * e.r, y = Math.sin(a) * e.r;
-          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-        }
-        break;
-      }
-    }
+    traceEnemyShape(e.type, e.r, e.wobble);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
-
-    if (e.type === "sentry") {
-      ctx.fillStyle = flash ? "#fff" : e.color;
-      ctx.beginPath();
-      ctx.arc(0, 0, 4, 0, TAU);
-      ctx.fill();
-    }
-    if (e.type === "titan") {
-      ctx.strokeStyle = flash ? "#fff" : e.color;
-      ctx.beginPath();
-      ctx.arc(0, 0, e.r * 0.5, 0, TAU);
-      ctx.stroke();
-    }
+    drawEnemyDetail(e.type, e.r, flash ? "#fff" : e.color);
     ctx.restore();
 
     // hp bar for damaged elites
@@ -1447,6 +1456,64 @@ function drawEnemies() {
       ctx.fillStyle = e.color;
       ctx.fillRect(e.x - w / 2, e.y - e.r - 10, w * (e.hp / e.maxHp), 4);
     }
+  }
+}
+
+// Path segments for an enemy body at the origin — shared by the arena
+// renderer and the new-hostile briefing popup. Caller wraps in beginPath/closePath.
+function traceEnemyShape(type, r, wobble) {
+  switch (type) {
+    case "drifter": { // pentagon blob
+      for (let i = 0; i < 5; i++) {
+        const a = TAU * i / 5 + wobble * 0.15;
+        const rr = r * (0.85 + 0.15 * Math.sin(wobble + i * 2));
+        const x = Math.cos(a) * rr, y = Math.sin(a) * rr;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      break;
+    }
+    case "darter": { // arrow
+      ctx.moveTo(r * 1.4, 0);
+      ctx.lineTo(-r, -r * 0.9);
+      ctx.lineTo(-r * 0.4, 0);
+      ctx.lineTo(-r, r * 0.9);
+      break;
+    }
+    case "sentry": { // diamond w/ inner eye
+      ctx.moveTo(r, 0); ctx.lineTo(0, -r); ctx.lineTo(-r, 0); ctx.lineTo(0, r);
+      break;
+    }
+    case "orbiter": { // triangle
+      for (let i = 0; i < 3; i++) {
+        const a = TAU * i / 3 + wobble;
+        const x = Math.cos(a) * r, y = Math.sin(a) * r;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      break;
+    }
+    case "titan": { // heavy hexagon
+      for (let i = 0; i < 6; i++) {
+        const a = TAU * i / 6 + wobble * 0.1;
+        const x = Math.cos(a) * r, y = Math.sin(a) * r;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      break;
+    }
+  }
+}
+
+function drawEnemyDetail(type, r, color) { // eye/ring accents, drawn at the origin
+  if (type === "sentry") {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(0, 0, Math.max(3, r * 0.28), 0, TAU);
+    ctx.fill();
+  }
+  if (type === "titan") {
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.5, 0, TAU);
+    ctx.stroke();
   }
 }
 
@@ -1828,13 +1895,14 @@ function drawTitle() {
 }
 
 function titleButtons() {
-  const bw = Math.min(150, (W - 80) / 3 - 10), bh = 38, gap = 14;
-  const x0 = W / 2 - (bw * 3 + gap * 2) / 2;
+  const bw = Math.min(150, (W - 80) / 4 - 10), bh = 38, gap = 14;
+  const x0 = W / 2 - (bw * 4 + gap * 3) / 2;
   const y = H - bh - 14 - SAFE.b;
   return [
-    { id: "scores", label: "SCORES", key: "H", x: x0, y, w: bw, h: bh },
-    { id: "stats",  label: "STATS",  key: "S", x: x0 + bw + gap, y, w: bw, h: bh },
-    { id: "ships",  label: "SHIPS",  key: "C", x: x0 + (bw + gap) * 2, y, w: bw, h: bh },
+    { id: "scores",   label: "SCORES",   key: "H", x: x0, y, w: bw, h: bh },
+    { id: "stats",    label: "STATS",    key: "S", x: x0 + bw + gap, y, w: bw, h: bh },
+    { id: "ships",    label: "SHIPS",    key: "C", x: x0 + (bw + gap) * 2, y, w: bw, h: bh },
+    { id: "settings", label: "SETTINGS", key: "O", x: x0 + (bw + gap) * 3, y, w: bw, h: bh },
   ];
 }
 
@@ -2032,6 +2100,117 @@ function drawShips() {
     }
     ctx.restore();
   });
+  ctx.restore();
+}
+
+function settingRowRects() {
+  const w = Math.min(560, W * 0.72), h = 64, gap = 14;
+  const x = W / 2 - w / 2, y0 = H * 0.30;
+  return SETTING_DEFS.map((s, i) => ({ x, y: y0 + i * (h + gap), w, h }));
+}
+
+function settingAction(x, y) {
+  const rects = settingRowRects();
+  for (let i = 0; i < rects.length; i++) {
+    if (inRect(x, y, rects[i])) { toggleSetting(SETTING_DEFS[i].id); return true; }
+  }
+  return false;
+}
+
+function drawSettings() {
+  drawMenuChrome("SETTINGS", TOUCH.active ? "tap a row to toggle · tap empty space to go back" : "[1-9] or click to toggle · [ESC] back");
+  ctx.save();
+  const rects = settingRowRects();
+  SETTING_DEFS.forEach((s, i) => {
+    const r = rects[i];
+    const on = !!settings[s.id];
+    const hov = !TOUCH.active && inRect(mouse.x, mouse.y, r);
+    ctx.fillStyle = hov ? "rgba(20,26,46,0.95)" : "rgba(10,14,28,0.85)";
+    ctx.strokeStyle = hov ? "#ffe066" : "#3a6f8a";
+    ctx.lineWidth = 2;
+    roundRect(r.x, r.y, r.w, r.h, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.textAlign = "left";
+    ctx.font = "bold 14px 'Courier New', monospace";
+    ctx.fillStyle = "#cfe8ff";
+    ctx.fillText((TOUCH.active ? "" : "[" + (i + 1) + "] ") + s.name, r.x + 16, r.y + 26);
+    ctx.font = "11px 'Courier New', monospace";
+    ctx.fillStyle = "#8aa8c8";
+    ctx.fillText(s.desc, r.x + 16, r.y + 46);
+
+    // ON/OFF pill
+    const pw = 64, ph = 26, px = r.x + r.w - pw - 14, py = r.y + r.h / 2 - ph / 2;
+    ctx.fillStyle = on ? "rgba(39,232,167,0.15)" : "rgba(255,61,110,0.12)";
+    ctx.strokeStyle = on ? "#27e8a7" : "#ff3d6e";
+    roundRect(px, py, pw, ph, 13);
+    ctx.fill();
+    ctx.stroke();
+    ctx.textAlign = "center";
+    ctx.font = "bold 13px 'Courier New', monospace";
+    ctx.fillStyle = on ? "#27e8a7" : "#ff3d6e";
+    ctx.fillText(on ? "ON" : "OFF", px + pw / 2, py + ph / 2 + 4);
+  });
+  ctx.restore();
+}
+
+function drawEnemyIntro() {
+  const t = ENEMY_TYPES[introPopup.type];
+  const a = clamp(introPopup.t / 0.25, 0, 1); // pop-in
+  ctx.save();
+  ctx.globalAlpha = a * 0.78;
+  ctx.fillStyle = "rgba(2,3,10,1)";
+  ctx.fillRect(-30, -30, W + 60, H + 60);
+  ctx.globalAlpha = a;
+
+  const pw = Math.min(460, W * 0.74), ph = Math.min(250, H * 0.62);
+  const px = W / 2 - pw / 2, py = H / 2 - ph / 2;
+  neon(t.color, 18);
+  ctx.fillStyle = "rgba(10,14,28,0.96)";
+  ctx.strokeStyle = t.color;
+  ctx.lineWidth = 2;
+  roundRect(px, py, pw, ph, 12);
+  ctx.fill();
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  ctx.textAlign = "center";
+  ctx.font = "bold 12px 'Courier New', monospace";
+  ctx.fillStyle = "#ff7a9c";
+  ctx.fillText("⚠ NEW HOSTILE DETECTED ⚠", W / 2, py + 26);
+
+  // live sprite, wobbling like the real thing
+  ctx.save();
+  ctx.translate(W / 2, py + ph * 0.36);
+  const dr = clamp(t.r * 2, 26, 46);
+  neon(t.color, 16);
+  ctx.strokeStyle = t.color;
+  ctx.fillStyle = shade(t.color);
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  traceEnemyShape(introPopup.type, dr, time * 3);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  drawEnemyDetail(introPopup.type, dr, t.color);
+  ctx.restore();
+
+  ctx.font = "bold 22px 'Courier New', monospace";
+  ctx.fillStyle = t.color;
+  neon(t.color, 10);
+  ctx.fillText(t.name, W / 2, py + ph * 0.62);
+  ctx.shadowBlur = 0;
+
+  ctx.font = "13px 'Courier New', monospace";
+  ctx.fillStyle = "#8aa8c8";
+  wrapText(t.desc, W / 2, py + ph * 0.62 + 24, pw - 56, 17);
+
+  if (introPopup.t > 0.35 && Math.floor(time * 1.6) % 2 === 0) {
+    ctx.font = "bold 13px 'Courier New', monospace";
+    ctx.fillStyle = "#ffe066";
+    ctx.fillText(TOUCH.active ? "TAP TO ENGAGE" : "ANY KEY TO ENGAGE", W / 2, py + ph - 16);
+  }
   ctx.restore();
 }
 

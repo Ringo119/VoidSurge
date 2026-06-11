@@ -68,6 +68,17 @@ function check(label, cond) {
 frames(60); // title screen idles
 check("title state", get("state") === "title");
 
+// settings menu: toggle enemy intro popups off so the core-loop scenario runs unfrozen
+key("KeyO"); check("settings screen opens", get("state") === "settings");
+frames(10);
+check("intro popups default on", get("settings.enemyIntros") === true);
+key("Digit1");
+check("toggle persists", get("settings.enemyIntros") === false && get("JSON.parse(localStorage.getItem('voidsurge_settings')).enemyIntros") === false);
+key("Escape");
+check("settings back to title", get("state") === "title");
+check("one new enemy type per wave, never on a boss wave",
+  get("(() => { const s = new Set(); for (const k in ENEMY_TYPES) { const t = ENEMY_TYPES[k]; if (s.has(t.intro) || t.intro % 5 === 0) return false; s.add(t.intro); } return true; })()"));
+
 key("Enter"); key("Enter", "keyup");
 check("game starts on Enter", get("state") === "play");
 check("wave 1", get("wave") === 1);
@@ -221,5 +232,31 @@ key("Enter");
 check("start from title after menus", get("state") === "play" && get("wave") === 1);
 frames(60);
 check("meta frames run clean", true);
+
+// ---- enemy intro popups ----
+check("no popup while disabled", get("introPopup") === null);
+run("settings.enemyIntros = true;");
+run("startGame();"); // fresh run resets seenThisRun
+frames(60);          // first drifter spawns ~0.4s in
+check("intro popup appears on first spawn", get("introPopup !== null") && get("introPopup.type") === "drifter");
+const frozenTimer = get("spawnTimer");
+frames(30);
+check("popup freezes gameplay", get("spawnTimer") === frozenTimer && get("introPopup.t") > 0.35);
+key("KeyW");
+check("movement keys don't dismiss", get("introPopup !== null"));
+key("Enter");
+check("any other key dismisses", get("introPopup") === null);
+frames(30);
+check("gameplay resumes after dismiss", get("spawnTimer") > frozenTimer);
+
+// a type's debut mid-wave also briefs, and a tap dismisses it
+run("spawnEnemy('sentry', 100, 100);");
+check("popup on debut of another type", get("introPopup !== null") && get("introPopup.type") === "sentry");
+frames(30); // pass the accidental-dismiss grace period
+touch("touchstart", [{ identifier: 8, clientX: 640, clientY: 360 }]);
+touch("touchend",   [{ identifier: 8, clientX: 640, clientY: 360 }]);
+check("tap dismisses popup", get("introPopup") === null);
+frames(60);
+check("popup session frames run clean", true);
 
 console.log(`\n${pass} checks passed — VOIDSURGE smoke test complete.`);

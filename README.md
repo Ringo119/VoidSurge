@@ -77,7 +77,7 @@ A true App Store build (e.g. wrapping this with [Capacitor](https://capacitorjs.
 | 1 / 2 / 3 or click | Pick an augment between waves |
 | P / Esc | Pause |
 | M | Mute |
-| H / S / C (title) | Score board / stats / ship hangar |
+| H / S / C / O (title) | Score board / stats / ship hangar / settings |
 | T (death screen) | Back to title menu |
 
 ## Features
@@ -93,6 +93,7 @@ A true App Store build (e.g. wrapping this with [Capacitor](https://capacitorjs.
   - **Service record** — lifetime stats: runs, kills by enemy type, what killed you, bosses destroyed, best combo, dashes, pickups, favorite augment, time played (STATS)
   - **Hangar** — 8 ship skins unlocked by achievements (kill a boss, reach wave 10/20, max combo, 100 dashes, 250 pickups, clear wave 5+ untouched); recolors hull, trail, and bullets (SHIPS)
   - **Score ghosts** — a marker on the wave where your best run died, and a "record pace" toast when you pass your old high score mid-run
+- **Enemy intel popups** — at most one new enemy type debuts per wave, and its first appearance in a run pauses the action with a briefing card (sprite, name, tactics); toggle it in SETTINGS on the title screen
 - **Mobile**: twin-stick touch controls, safe-area-aware HUD, PWA manifest + service worker, generated home-screen icons
 
 ## Dev
