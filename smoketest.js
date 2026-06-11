@@ -383,4 +383,36 @@ check("reaver detonates into a bullet nova", get("enemies.length") === 0 && get(
 frames(120);
 check("late-game enemy frames run clean", true);
 
+// ---- portrait rotation (iOS PWAs can't lock orientation; the game rotates itself) ----
+run("state = 'title'; paused = false;");
+check("landscape is not rotated", get("ROT") === false && get("W") === 1280 && get("H") === 720);
+run("window.innerWidth = 720; window.innerHeight = 1280; resize();");
+check("portrait viewport renders rotated", get("ROT") === true && get("W") === 1280 && get("H") === 720);
+check("portrait touch maps into game space",
+  get("eventXY({clientX: 100, clientY: 300}).x") === 300 && get("eventXY({clientX: 100, clientY: 300}).y") === 620);
+
+// tap the SETTINGS title button through rotated screen coords: game (886,687) = screen (33,886)
+touch("touchstart", [{ identifier: 13, clientX: 33, clientY: 886 }]);
+touch("touchend",   [{ identifier: 13, clientX: 33, clientY: 886 }]);
+check("rotated tap hits title buttons", get("state") === "settings");
+touch("touchstart", [{ identifier: 14, clientX: 120, clientY: 200 }]); // game (200,600): empty space
+touch("touchend",   [{ identifier: 14, clientX: 120, clientY: 200 }]);
+check("rotated tap returns to title", get("state") === "title");
+
+// start a run and drive the move stick through rotated coords
+touch("touchstart", [{ identifier: 15, clientX: 400, clientY: 640 }]); // game (640,320): empty title space
+check("rotated tap starts game", get("state") === "play");
+touch("touchend", [{ identifier: 15, clientX: 400, clientY: 640 }]);
+run("enemies.length = 0; spawnQueue.length = 0; waveActive = false;");
+touch("touchstart", [{ identifier: 16, clientX: 220, clientY: 200 }]); // game (200,500): left half = move stick
+touch("touchmove",  [{ identifier: 16, clientX: 220, clientY: 280 }]); // drag to game (280,500): +x
+frames(30);
+check("rotated move stick drives player", get("player.vx") > 50);
+touch("touchend", [{ identifier: 16, clientX: 220, clientY: 280 }]);
+
+run("window.innerWidth = 1280; window.innerHeight = 720; resize();");
+check("landscape restores unrotated", get("ROT") === false && get("W") === 1280 && get("H") === 720);
+frames(30);
+check("rotation frames run clean", true);
+
 console.log(`\n${pass} checks passed — VOIDSURGE smoke test complete.`);

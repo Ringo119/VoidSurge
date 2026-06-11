@@ -37,7 +37,7 @@ The game ships as a Progressive Web App: touch twin-stick controls, fullscreen h
    ```
    (use your own IP; `npx serve` defaults to port `3000`, Python to `8000`).
 
-5. Rotate the phone to **landscape**, tap the screen, and play. For the best experience, tap the **Share** button → **Add to Home Screen**, then launch from the icon — this runs fullscreen without Safari's address bar.
+5. Tap the screen and play — landscape is best, but the game renders rotated automatically if the phone stays portrait (iOS doesn't let web apps lock orientation). For the best experience, tap the **Share** button → **Add to Home Screen**, then launch from the icon — this runs fullscreen without Safari's address bar.
 
 > Tips: if there's no sound, check the silent/ring switch on the side of the phone — iOS mutes web audio when the ringer is silenced. Tap once anywhere to unlock audio (an iOS requirement).
 
@@ -95,7 +95,7 @@ A true App Store build (e.g. wrapping this with [Capacitor](https://capacitorjs.
   - **Hangar** — 8 ship skins unlocked by achievements (kill a boss, reach wave 10/20, max combo, 100 dashes, 250 pickups, clear wave 5+ untouched); recolors hull, trail, and bullets (SHIPS)
   - **Score ghosts** — a marker on the wave where your best run died, and a "record pace" toast when you pass your old high score mid-run
 - **Enemy intel popups** — at most one new enemy type debuts per wave, and its first appearance in a run pauses the action with a briefing card (sprite, name, tactics); toggle it in SETTINGS on the title screen
-- **Mobile**: twin-stick touch controls, safe-area-aware HUD, PWA manifest + service worker, generated home-screen icons
+- **Mobile**: twin-stick touch controls, safe-area-aware HUD, PWA manifest + service worker, generated home-screen icons; if the device stays in portrait (iOS PWAs can't lock orientation), the game renders itself rotated 90° so it always plays in landscape
 - The current version number is shown in the top-right of the title screen (and tracked in `VERSION` in index.html — bump it together with the `sw.js` cache name when shipping changes)
 
 ## Dev

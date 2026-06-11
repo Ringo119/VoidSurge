@@ -43,28 +43,47 @@
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 let W = 0, H = 0, DPR = 1;
+// iOS ignores the manifest "orientation" field — PWAs can't lock to landscape.
+// When the viewport is portrait we render the whole game rotated 90° instead
+// (ROT = true): logical W/H swap, the base canvas transform turns the scene,
+// and eventXY() maps client coords back into game space.
+let ROT = false;
 // notch / home-indicator insets (iPhone), read from the CSS env() vars
 const SAFE = { t: 0, r: 0, b: 0, l: 0 };
 function readSafeArea() {
   try {
     if (typeof getComputedStyle !== "function" || !document.documentElement) return;
     const cs = getComputedStyle(document.documentElement);
-    SAFE.t = parseFloat(cs.getPropertyValue("--sat")) || 0;
-    SAFE.r = parseFloat(cs.getPropertyValue("--sar")) || 0;
-    SAFE.b = parseFloat(cs.getPropertyValue("--sab")) || 0;
-    SAFE.l = parseFloat(cs.getPropertyValue("--sal")) || 0;
+    const t = parseFloat(cs.getPropertyValue("--sat")) || 0;
+    const r = parseFloat(cs.getPropertyValue("--sar")) || 0;
+    const b = parseFloat(cs.getPropertyValue("--sab")) || 0;
+    const l = parseFloat(cs.getPropertyValue("--sal")) || 0;
+    if (ROT) { SAFE.t = r; SAFE.r = b; SAFE.b = l; SAFE.l = t; }
+    else { SAFE.t = t; SAFE.r = r; SAFE.b = b; SAFE.l = l; }
   } catch (e) {}
 }
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
-  W = window.innerWidth; H = window.innerHeight;
-  canvas.width = W * DPR; canvas.height = H * DPR;
-  canvas.style.width = W + "px"; canvas.style.height = H + "px";
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const vw = window.innerWidth, vh = window.innerHeight;
+  ROT = vh > vw;
+  W = ROT ? vh : vw; H = ROT ? vw : vh;
+  canvas.width = vw * DPR; canvas.height = vh * DPR;
+  canvas.style.width = vw + "px"; canvas.style.height = vh + "px";
+  // rotated: game point (x, y) lands at screen (vw - y, x) — hold the phone notch-left
+  if (ROT) ctx.setTransform(0, DPR, -DPR, 0, vw * DPR, 0);
+  else ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   readSafeArea();
 }
+// map a pointer/touch event's client coords into game space
+function eventXY(t) {
+  return ROT ? { x: t.clientY, y: window.innerWidth - t.clientX } : { x: t.clientX, y: t.clientY };
+}
 window.addEventListener("resize", resize);
-window.addEventListener("orientationchange", () => setTimeout(resize, 50));
+// iOS standalone PWAs fire these late (or with stale sizes) on rotation — retry
+window.addEventListener("orientationchange", () => { setTimeout(resize, 50); setTimeout(resize, 400); });
+if (typeof window.visualViewport !== "undefined" && window.visualViewport) {
+  window.visualViewport.addEventListener("resize", resize);
+}
 resize();
 
 // ---------- Utils ----------
@@ -174,7 +193,7 @@ window.addEventListener("keydown", e => {
   handleKeyPress(e.code);
 });
 window.addEventListener("keyup", e => keys[e.code] = false);
-canvas.addEventListener("mousemove", e => { mouse.x = e.clientX; mouse.y = e.clientY; TOUCH.active = false; });
+canvas.addEventListener("mousemove", e => { const p = eventXY(e); mouse.x = p.x; mouse.y = p.y; TOUCH.active = false; });
 canvas.addEventListener("mousedown", e => { mouse.down = true; TOUCH.active = false; handleClick(); });
 canvas.addEventListener("mouseup", () => mouse.down = false);
 window.addEventListener("blur", () => { for (const k in keys) keys[k] = false; mouse.down = false; releaseAllTouches(); });
@@ -203,7 +222,8 @@ function releaseAllTouches() {
 }
 
 function grabStick(s, t) {
-  s.id = t.identifier; s.ox = t.clientX; s.oy = t.clientY; s.dx = 0; s.dy = 0; s.mag = 0;
+  const p = eventXY(t);
+  s.id = t.identifier; s.ox = p.x; s.oy = p.y; s.dx = 0; s.dy = 0; s.mag = 0;
 }
 
 function onTouchStart(e) {
@@ -211,7 +231,7 @@ function onTouchStart(e) {
   TOUCH.active = true;
   Sound.init(); Sound.resume();
   for (const t of e.changedTouches) {
-    const x = t.clientX, y = t.clientY;
+    const p = eventXY(t), x = p.x, y = p.y;
     if (state === "title") {
       const b = titleButtonAt(x, y);
       if (b) state = b; else startGame();
@@ -252,7 +272,8 @@ function onTouchMove(e) {
   for (const t of e.changedTouches) {
     for (const s of [TOUCH.move, TOUCH.aim]) {
       if (s.id !== t.identifier) continue;
-      let dx = t.clientX - s.ox, dy = t.clientY - s.oy;
+      const p = eventXY(t);
+      let dx = p.x - s.ox, dy = p.y - s.oy;
       const len = Math.hypot(dx, dy);
       const m = Math.min(len / TOUCH.stickR, 1);
       if (len > 0) { dx /= len; dy /= len; }
@@ -279,7 +300,7 @@ if (typeof document.addEventListener === "function") {
 }
 
 // ---------- Game state ----------
-const VERSION = "1.4.0"; // bump alongside the sw.js cache when shipping
+const VERSION = "1.4.1"; // bump alongside the sw.js cache when shipping
 let state = "title";          // title | play | upgrade | over
 let paused = false;
 let wave = 0;
