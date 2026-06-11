@@ -82,7 +82,7 @@ A true App Store build (e.g. wrapping this with [Capacitor](https://capacitorjs.
 
 ## Features
 
-- **5 enemy types** with distinct AI: drifters (chase), darters (lunge), sentries (kite + shoot), orbiters (circle-strafe), titans (tanks that split on death)
+- **10 enemy types** with distinct AI — early waves: drifters (chase), darters (lunge), sentries (kite + shoot), orbiters (circle-strafe), titans (tanks that split on death); late waves bring the hunters: shielders (frontal bullet-eating shield — flank or pierce), weavers (sine-slalom with a burning wake), phantoms (cloak, teleport beside you, strike), minelayers (seed proximity mines), reavers (heavy hunter-killers that detonate into a bullet nova on death)
 - **Boss every 5 waves, two of them alternating** — the **Void Harbinger** (wave 5, 15, 25…) cycles radial bursts, aimed volleys, and a telegraphed charge, and calls reinforcements below half health; the **Null Mother** (wave 10, 20, 30…) is an edge-hugging carrier that births endless broods and only takes full damage while her core glows open
 - **Boss modifiers** — the first fight against each boss in a run is plain; repeat encounters roll one of 5 modifiers per boss (Berserker, Bulletstorm, Warpshift, Phase Aegis, Void Leech for the Harbinger; Prolific, Armored Core, Elite Brood, Seeker Spines, Regenerator for the Mother), shown on the boss health bar and worth 30% more score
 - **13 stackable augments** — multishot, pierce, crit, orbiting sentry drones, lifesteal, shields, and more; pick 1 of 3 after each wave
@@ -96,6 +96,7 @@ A true App Store build (e.g. wrapping this with [Capacitor](https://capacitorjs.
   - **Score ghosts** — a marker on the wave where your best run died, and a "record pace" toast when you pass your old high score mid-run
 - **Enemy intel popups** — at most one new enemy type debuts per wave, and its first appearance in a run pauses the action with a briefing card (sprite, name, tactics); toggle it in SETTINGS on the title screen
 - **Mobile**: twin-stick touch controls, safe-area-aware HUD, PWA manifest + service worker, generated home-screen icons
+- The current version number is shown in the top-right of the title screen (and tracked in `VERSION` in index.html — bump it together with the `sw.js` cache name when shipping changes)
 
 ## Dev
 

@@ -279,6 +279,7 @@ if (typeof document.addEventListener === "function") {
 }
 
 // ---------- Game state ----------
+const VERSION = "1.4.0"; // bump alongside the sw.js cache when shipping
 let state = "title";          // title | play | upgrade | over
 let paused = false;
 let wave = 0;
@@ -469,6 +470,17 @@ const ENEMY_TYPES = {
              name: "TITAN", desc: "heavily armored bruiser. splits into three drifters when destroyed." },
   orbiter: { r: 11, hp: 18, speed: 120, dmg: 9,  score: 20, color: "#27e8a7", intro: 4, cost: 1.8, weight: 0.8,
              name: "ORBITER", desc: "circles your position, peppering you from the flank. watch your sides." },
+  // late-game hunters: high cost keeps them rare, high stats keep them scary
+  shielder: { r: 16, hp: 45,  speed: 60,  dmg: 14, score: 40, color: "#4da6ff", intro: 7,  cost: 3,   weight: 0.7,
+             name: "SHIELDER", desc: "advances behind a frontal energy shield that eats your bullets. flank it — or lance straight through." },
+  weaver:   { r: 12, hp: 26,  speed: 200, dmg: 10, score: 35, color: "#ff66d9", intro: 8,  cost: 2.5, weight: 0.7,
+             name: "WEAVER", desc: "slaloms across the arena trailing burning void residue. never touch the wake." },
+  phantom:  { r: 13, hp: 30,  speed: 130, dmg: 16, score: 45, color: "#d7e3ff", intro: 9,  cost: 3,   weight: 0.6,
+             name: "PHANTOM", desc: "cloaks, slips in beside you, and strikes. it can only be hurt while visible." },
+  minelayer:{ r: 15, hp: 38,  speed: 85,  dmg: 18, score: 45, color: "#ffd24d", intro: 11, cost: 3.5, weight: 0.5,
+             name: "MINELAYER", desc: "keeps its distance and seeds the arena with proximity mines. mind your footing." },
+  reaver:   { r: 22, hp: 130, speed: 90,  dmg: 22, score: 70, color: "#ff2e2e", intro: 13, cost: 5,   weight: 0.4,
+             name: "REAVER", desc: "void-forged hunter-killer. runs you down — and detonates into a bullet nova when destroyed." },
 };
 
 // Guarantee: at most one new enemy type debuts per wave, and never on a boss
@@ -506,6 +518,7 @@ function spawnEnemy(type, x, y, scale = 1) {
     angle: rand(0, TAU), fireT: rand(1, 2.5), lungeT: rand(0.5, 2), lunging: 0,
     orbitDir: Math.random() < 0.5 ? 1 : -1, orbitDist: rand(140, 220),
     spawnT: 0.6, hitFlash: 0, wobble: rand(0, TAU),
+    cloaked: 0, visT: rand(1.8, 2.8), baseA: null,
   });
 }
 
@@ -664,6 +677,11 @@ function killEnemy(e) {
     for (let i = 0; i < 3; i++) {
       spawnEnemy("drifter", e.x + rand(-25, 25), e.y + rand(-25, 25), 0.7 + wave * 0.03);
     }
+  }
+  if (e.type === "reaver") {
+    // death nova: radial bullet burst — back off before the kill shot
+    const off = rand(0, TAU);
+    for (let i = 0; i < 8; i++) enemyShoot(e.x, e.y, off + TAU * i / 8, 190, 12, "reaver");
   }
   if (Math.random() < 0.07) spawnPickup(e.x, e.y, "heal");
   else if (Math.random() < 0.18) spawnPickup(e.x, e.y, "gem");
@@ -975,7 +993,7 @@ function updateDrones(dt) {
       // find nearest enemy
       let best = null, bd = 460 * 460;
       for (const e of enemies) {
-        if (e.spawnT > 0) continue;
+        if (e.spawnT > 0 || e.cloaked > 0) continue;
         const dd = dist2(d.x, d.y, e.x, e.y);
         if (dd < bd) { bd = dd; best = e; }
       }
@@ -1070,10 +1088,105 @@ function updateEnemies(dt) {
         e.angle = aToP;
         break;
       }
+      case "shielder": { // walks where it faces; limited turn rate lets you flank
+        const diff = ((aToP - e.angle + Math.PI * 3) % TAU) - Math.PI;
+        e.angle += clamp(diff, -1.1 * dt, 1.1 * dt);
+        e.x += Math.cos(e.angle) * e.speed * dt;
+        e.y += Math.sin(e.angle) * e.speed * dt;
+        break;
+      }
+      case "weaver": { // sine-slaloms across the arena, dropping a burning wake
+        if (e.baseA === null) e.baseA = aToP;
+        e.lungeT -= dt;
+        if (e.lungeT <= 0) { e.lungeT = rand(2.5, 4); e.baseA = aToP + rand(-0.6, 0.6); }
+        const a = e.baseA + Math.sin(e.wobble * 2.4) * 1.1;
+        e.x += Math.cos(a) * e.speed * dt;
+        e.y += Math.sin(a) * e.speed * dt;
+        e.angle = a;
+        if (e.x < 16 || e.x > W - 16) { e.baseA = Math.PI - e.baseA; e.x = clamp(e.x, 16, W - 16); }
+        if (e.y < 16 || e.y > H - 16) { e.baseA = -e.baseA; e.y = clamp(e.y, 16, H - 16); }
+        e.fireT -= dt;
+        if (e.fireT <= 0) {
+          e.fireT = 0.07;
+          enemyBullets.push({ x: e.x - Math.cos(a) * e.r, y: e.y - Math.sin(a) * e.r, vx: 0, vy: 0, dmg: 8, life: 2.0, r: 6, src: "weaver", trail: true });
+        }
+        break;
+      }
+      case "phantom": { // cloaks, re-materializes beside you, strikes
+        if (e.cloaked > 0) {
+          e.cloaked -= dt;
+          if (e.cloaked <= 0) {
+            const a = rand(0, TAU);
+            e.x = clamp(player.x + Math.cos(a) * 170, 30, W - 30);
+            e.y = clamp(player.y + Math.sin(a) * 170, 30, H - 30);
+            e.spawnT = 0.4; // re-entry telegraph
+            e.visT = rand(2.2, 3.2);
+            e.lungeT = 0.55; e.lunging = 0;
+            spawnParticles(e.x, e.y, e.color, 12, 140, 0.4);
+            Sound.tone(620, 0.1, "sine", 0.06, 310);
+          }
+          break;
+        }
+        e.visT -= dt;
+        if (e.visT <= 0) {
+          e.cloaked = rand(1.0, 1.6);
+          spawnParticles(e.x, e.y, e.color, 12, 100, 0.4);
+          break;
+        }
+        e.lungeT -= dt;
+        if (e.lunging > 0) {
+          e.lunging -= dt;
+          e.x += Math.cos(e.angle) * e.speed * 2.6 * dt;
+          e.y += Math.sin(e.angle) * e.speed * 2.6 * dt;
+        } else {
+          e.angle = aToP;
+          e.x += Math.cos(aToP) * e.speed * 0.5 * dt;
+          e.y += Math.sin(aToP) * e.speed * 0.5 * dt;
+          if (e.lungeT <= 0) { e.lunging = 0.4; e.lungeT = rand(1.3, 2.1); }
+        }
+        break;
+      }
+      case "minelayer": { // keeps range and seeds proximity mines
+        const d = Math.sqrt(dist2(e.x, e.y, player.x, player.y));
+        const dir = d < 340 ? -1 : d > 460 ? 1 : 0;
+        e.x = clamp(e.x + Math.cos(aToP) * e.speed * dir * dt, 20, W - 20);
+        e.y = clamp(e.y + Math.sin(aToP) * e.speed * dir * dt, 20, H - 20);
+        e.angle = aToP;
+        e.fireT -= dt;
+        if (e.fireT <= 0) {
+          e.fireT = rand(2.4, 3.4);
+          enemyBullets.push({ x: e.x, y: e.y, vx: rand(-25, 25), vy: rand(-25, 25), dmg: e.dmg, life: 9, r: 7, src: "minelayer", mine: true, armT: 0.8 });
+          spawnText(e.x, e.y - e.r - 12, "MINE", e.color, 11);
+          Sound.tone(330, 0.1, "square", 0.06, 200);
+        }
+        break;
+      }
+      case "reaver": { // chases hard, fires fans, charges in close
+        const d = Math.sqrt(dist2(e.x, e.y, player.x, player.y));
+        e.lungeT -= dt;
+        if (e.lunging > 0) {
+          e.lunging -= dt;
+          e.x += Math.cos(e.angle) * e.speed * 3.0 * dt;
+          e.y += Math.sin(e.angle) * e.speed * 3.0 * dt;
+          spawnParticles(e.x, e.y, e.color, 1, 50, 0.25, 3);
+        } else {
+          const diff = ((aToP - e.angle + Math.PI * 3) % TAU) - Math.PI;
+          e.angle += clamp(diff, -2.4 * dt, 2.4 * dt);
+          e.x += Math.cos(e.angle) * e.speed * dt;
+          e.y += Math.sin(e.angle) * e.speed * dt;
+          e.fireT -= dt;
+          if (e.fireT <= 0 && d < 620) {
+            e.fireT = rand(1.5, 2.2);
+            for (let k = -1; k <= 1; k++) enemyShoot(e.x, e.y, aToP + k * 0.18, 300, e.dmg * 0.5, e.type);
+          }
+          if (e.lungeT <= 0 && d < 440) { e.lunging = 0.55; e.lungeT = rand(2.6, 4); e.angle = aToP; }
+        }
+        break;
+      }
     }
 
-    // touch damage
-    if (dist2(e.x, e.y, player.x, player.y) < (e.r + player.r) * (e.r + player.r)) {
+    // touch damage (cloaked phantoms are intangible)
+    if (e.cloaked <= 0 && dist2(e.x, e.y, player.x, player.y) < (e.r + player.r) * (e.r + player.r)) {
       damagePlayer(e.dmg, e.type);
       // knock enemy back a bit
       e.x -= Math.cos(aToP) * 20;
@@ -1269,8 +1382,19 @@ function updateBullets(dt) {
     // vs enemies
     for (let j = enemies.length - 1; j >= 0; j--) {
       const e = enemies[j];
-      if (e.spawnT > 0 || b.hit.has(e)) continue;
+      if (e.spawnT > 0 || e.cloaked > 0 || b.hit.has(e)) continue;
       if (dist2(b.x, b.y, e.x, e.y) < (e.r + 5) * (e.r + 5)) {
+        // shielder's frontal arc eats the bullet outright
+        if (e.type === "shielder") {
+          const ia = Math.atan2(b.y - e.y, b.x - e.x);
+          const diff = ((ia - e.angle + Math.PI * 3) % TAU) - Math.PI;
+          if (Math.abs(diff) < 1.0) {
+            spawnParticles(b.x, b.y, e.color, 4, 100, 0.25, 2);
+            Sound.tone(210, 0.05, "square", 0.05, 90);
+            consumed = true;
+            break;
+          }
+        }
         e.hp -= b.dmg;
         e.hitFlash = 0.08;
         Sound.hit();
@@ -1325,6 +1449,23 @@ function updateBullets(dt) {
 function updateEnemyBullets(dt) {
   for (let i = enemyBullets.length - 1; i >= 0; i--) {
     const b = enemyBullets[i];
+    if (b.mine) {
+      // proximity mine: drifts to a stop, arms, detonates when stepped near
+      b.vx *= Math.pow(0.05, dt); b.vy *= Math.pow(0.05, dt);
+      b.x += b.vx * dt; b.y += b.vy * dt;
+      b.life -= dt;
+      if (b.armT > 0) b.armT -= dt;
+      if (b.life <= 0) { enemyBullets.splice(i, 1); continue; }
+      if (b.armT <= 0 && dist2(b.x, b.y, player.x, player.y) < 70 * 70) {
+        enemyBullets.splice(i, 1);
+        Sound.boom(true);
+        spawnParticles(b.x, b.y, "#ffd24d", 30, 300, 0.7, 4);
+        spawnParticles(b.x, b.y, "#fff", 10, 200, 0.4, 3);
+        shake = Math.min(shake + 10, 20);
+        if (dist2(b.x, b.y, player.x, player.y) < 110 * 110) damagePlayer(b.dmg, "minelayer");
+      }
+      continue;
+    }
     if (b.home) {
       // curve toward the player at a capped turn rate (rad/s)
       const cur = Math.atan2(b.vy, b.vx);
@@ -1574,6 +1715,30 @@ function drawEnemyBullets() {
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
   for (const b of enemyBullets) {
+    if (b.trail) { // weaver wake: fading embers
+      neon("#ff66d9", 8);
+      ctx.globalAlpha = clamp(b.life / 2, 0.2, 0.75);
+      ctx.fillStyle = "#ff66d9";
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r * (0.7 + 0.3 * Math.sin(time * 6 + b.x)), 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      continue;
+    }
+    if (b.mine) { // proximity mine: armed mines blink
+      const blink = b.armT <= 0 && Math.floor(time * 5) % 2 === 0;
+      neon("#ffd24d", 10);
+      ctx.strokeStyle = "#ffd24d";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r + 3, 0, TAU);
+      ctx.stroke();
+      ctx.fillStyle = blink ? "#fff" : "#ffd24d";
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r * 0.55, 0, TAU);
+      ctx.fill();
+      continue;
+    }
     neon("#ff3d6e", 10);
     ctx.fillStyle = "#ff3d6e";
     ctx.beginPath();
@@ -1605,6 +1770,8 @@ function drawEnemies() {
       continue;
     }
 
+    if (e.cloaked > 0) ctx.globalAlpha = 0.10 + 0.05 * Math.sin(time * 9); // phantom shimmer
+
     ctx.rotate(e.angle);
     const flash = e.hitFlash > 0;
     neon(e.color, 12);
@@ -1619,8 +1786,8 @@ function drawEnemies() {
     drawEnemyDetail(e.type, e.r, flash ? "#fff" : e.color);
     ctx.restore();
 
-    // hp bar for damaged elites
-    if (e.hp < e.maxHp && (e.type === "titan" || e.type === "sentry")) {
+    // hp bar for damaged elites (anything with a beefy base hp pool)
+    if (e.hp < e.maxHp && e.cloaked <= 0 && ENEMY_TYPES[e.type].hp >= 28) {
       const w = e.r * 2;
       ctx.fillStyle = "rgba(0,0,0,0.5)";
       ctx.fillRect(e.x - w / 2, e.y - e.r - 10, w, 4);
@@ -1670,6 +1837,47 @@ function traceEnemyShape(type, r, wobble) {
       }
       break;
     }
+    case "shielder": { // armored wedge
+      ctx.moveTo(r * 0.9, -r * 0.55);
+      ctx.lineTo(r * 0.9, r * 0.55);
+      ctx.lineTo(-r * 0.2, r);
+      ctx.lineTo(-r, 0);
+      ctx.lineTo(-r * 0.2, -r);
+      break;
+    }
+    case "weaver": { // slim dart
+      ctx.moveTo(r * 1.5, 0);
+      ctx.lineTo(0, -r * 0.55);
+      ctx.lineTo(-r * 1.2, 0);
+      ctx.lineTo(0, r * 0.55);
+      break;
+    }
+    case "phantom": { // four-point shard
+      for (let i = 0; i < 8; i++) {
+        const a = TAU * i / 8 + wobble * 0.2;
+        const rr = i % 2 === 0 ? r * 1.1 : r * 0.4;
+        const x = Math.cos(a) * rr, y = Math.sin(a) * rr;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      break;
+    }
+    case "minelayer": { // squat barge
+      for (let i = 0; i < 8; i++) {
+        const a = TAU * i / 8 + TAU / 16;
+        const x = Math.cos(a) * r * 1.05, y = Math.sin(a) * r * 0.8;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      break;
+    }
+    case "reaver": { // pronged hunter-killer
+      ctx.moveTo(r * 1.45, 0);
+      ctx.lineTo(r * 0.1, -r * 0.5);
+      ctx.lineTo(-r, -r);
+      ctx.lineTo(-r * 0.45, 0);
+      ctx.lineTo(-r, r);
+      ctx.lineTo(r * 0.1, r * 0.5);
+      break;
+    }
     case "harbinger": { // 12-point star hull
       for (let i = 0; i < 12; i++) {
         const a = TAU * i / 12 + wobble * 0.05;
@@ -1707,6 +1915,19 @@ function drawEnemyDetail(type, r, color) { // eye/ring/core accents, drawn at th
     ctx.fillStyle = type === "mother" ? "#ffe066" : color;
     ctx.beginPath();
     ctx.arc(0, 0, r * 0.2, 0, TAU);
+    ctx.fill();
+  }
+  if (type === "shielder") { // frontal energy shield
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 7, -1.0, 1.0);
+    ctx.stroke();
+  }
+  if (type === "reaver" || type === "minelayer") {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(0, 0, Math.max(3, r * 0.22), 0, TAU);
     ctx.fill();
   }
 }
@@ -2078,6 +2299,13 @@ function drawTouchControls() {
 
 function drawTitle() {
   ctx.save();
+
+  // version, top right
+  ctx.font = "11px 'Courier New', monospace";
+  ctx.fillStyle = "#5e6b7d";
+  ctx.textAlign = "right";
+  ctx.fillText("v" + VERSION, W - 12 - SAFE.r, 20 + SAFE.t);
+
   ctx.textAlign = "center";
 
   // drifting demo particles
@@ -2253,18 +2481,19 @@ function drawStats() {
     ctx.fillText(String(r[1]), W * 0.47, y);
   });
 
-  const names = ["drifter", "darter", "sentry", "orbiter", "titan", "boss"];
+  const names = Object.keys(ENEMY_TYPES).concat("boss");
+  const rh = lh * (names.length > 7 ? 0.62 : 0.85); // squeeze when the roster grows
   ctx.textAlign = "left";
   ctx.fillStyle = "#7df9ff";
   ctx.fillText("KILLS BY TYPE", W * 0.62, y0);
   names.forEach((n, i) => {
-    const y = y0 + (i + 1) * lh * 0.85;
+    const y = y0 + (i + 1) * rh;
     ctx.fillStyle = n === "boss" ? "#ff2255" : ENEMY_TYPES[n].color;
     ctx.fillText(n.toUpperCase(), W * 0.62, y);
     ctx.fillStyle = "#cfe8ff";
     ctx.fillText(String(stats.killsBy[n] || 0), W * 0.79, y);
   });
-  const dy0 = y0 + 7 * lh * 0.85 + lh * 0.6;
+  const dy0 = y0 + (names.length + 1) * rh + lh * 0.6;
   ctx.fillStyle = "#ff3d6e";
   ctx.fillText("FELLED BY", W * 0.62, dy0);
   const deaths = Object.entries(stats.deathsBy).sort((a, b) => b[1] - a[1]).slice(0, 3);

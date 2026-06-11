@@ -329,4 +329,58 @@ check("repeat harbinger gains modifier", get("boss !== null") && get("boss.id") 
 frames(300);
 check("boss frames run clean", true);
 
+// ---- late-game enemies ----
+check("version string defined", typeof get("VERSION") === "string" && get("VERSION").length > 0);
+check("five new hostiles registered",
+  ["shielder", "weaver", "phantom", "minelayer", "reaver"].every(t => get("!!ENEMY_TYPES." + t)));
+check("new hostiles debut in the late game",
+  ["shielder", "weaver", "phantom", "minelayer", "reaver"].every(t => get("ENEMY_TYPES." + t + ".intro") >= 7));
+
+// quarantine the arena so each behavior can be tested in isolation
+run("boss = null; enemies.length = 0; spawnQueue.length = 0; enemyBullets.length = 0; bullets.length = 0; waveActive = false;");
+run("player.x = 200; player.y = 360; player.invuln = 0; player.dashing = 0; player.shield = 0;");
+
+// shielder: frontal arc eats bullets, rear shots land
+run("spawnEnemy('shielder', 900, 360); enemies[0].spawnT = 0; enemies[0].angle = Math.PI;");
+run("bullets.push({ x: 882, y: 360, vx: 0, vy: 0, dmg: 10, life: 0.5, pierce: 0, crit: false, hit: new Set() });");
+frames(1);
+check("shielder blocks frontal hits", Math.abs(get("enemies[0].maxHp - enemies[0].hp")) < 0.01 && get("bullets.length") === 0);
+run("bullets.push({ x: 918, y: 360, vx: 0, vy: 0, dmg: 10, life: 0.5, pierce: 0, crit: false, hit: new Set() });");
+frames(1);
+check("shielder takes rear hits", get("enemies[0].maxHp - enemies[0].hp") >= 9);
+
+// phantom: untouchable while cloaked
+run("enemies.length = 0; bullets.length = 0;");
+run("spawnEnemy('phantom', 900, 360); enemies[0].spawnT = 0; enemies[0].cloaked = 5;");
+run("bullets.push({ x: 900, y: 360, vx: 0, vy: 0, dmg: 10, life: 0.2, pierce: 0, crit: false, hit: new Set() });");
+frames(1);
+check("cloaked phantom can't be hit", Math.abs(get("enemies[0].maxHp - enemies[0].hp")) < 0.01);
+
+// weaver: leaves a burning wake
+run("enemies.length = 0; bullets.length = 0; enemyBullets.length = 0;");
+run("spawnEnemy('weaver', 640, 200); enemies[0].spawnT = 0; enemies[0].fireT = 0;");
+frames(30);
+check("weaver leaves a damaging wake", get("enemyBullets.filter(b => b.trail).length") >= 3);
+
+// minelayer: seeds mines that detonate on proximity
+run("enemies.length = 0; enemyBullets.length = 0;");
+run("spawnEnemy('minelayer', 1100, 600); enemies[0].spawnT = 0; enemies[0].fireT = 0.1;");
+frames(30);
+check("minelayer seeds mines", get("enemyBullets.filter(b => b.mine).length") >= 1);
+run("enemies.length = 0; enemyBullets.length = 0;");
+run("enemyBullets.push({ x: player.x + 40, y: player.y, vx: 0, vy: 0, dmg: 18, life: 9, r: 7, src: 'minelayer', mine: true, armT: 0 });");
+run("player.invuln = 0; player.dashing = 0; player.shield = 0;");
+const hpBeforeMine = get("player.hp");
+frames(1);
+check("proximity mine detonates", get("enemyBullets.filter(b => b.mine).length") === 0 && get("player.hp") < hpBeforeMine);
+
+// reaver: dies into a bullet nova
+run("enemies.length = 0; enemyBullets.length = 0; bullets.length = 0;");
+run("spawnEnemy('reaver', 900, 360); enemies[0].spawnT = 0; enemies[0].hp = 1;");
+run("bullets.push({ x: 900, y: 360, vx: 0, vy: 0, dmg: 10, life: 0.3, pierce: 0, crit: false, hit: new Set() });");
+frames(1);
+check("reaver detonates into a bullet nova", get("enemies.length") === 0 && get("enemyBullets.length") >= 8);
+frames(120);
+check("late-game enemy frames run clean", true);
+
 console.log(`\n${pass} checks passed — VOIDSURGE smoke test complete.`);
