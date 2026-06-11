@@ -259,4 +259,26 @@ check("tap dismisses popup", get("introPopup") === null);
 frames(60);
 check("popup session frames run clean", true);
 
+// ---- settings are fully operable by touch ----
+run("state = 'title';");
+frames(10);
+// SETTINGS title button: 4th of 4, at 1280x720 -> x0=319, w=150, gap=14, y=668..706
+touch("touchstart", [{ identifier: 9, clientX: 886, clientY: 687 }]);
+touch("touchend",   [{ identifier: 9, clientX: 886, clientY: 687 }]);
+check("settings opens by tap", get("state") === "settings");
+frames(10);
+const before = get("settings.enemyIntros");
+// first setting row: x=360..920, y=216..280
+touch("touchstart", [{ identifier: 10, clientX: 640, clientY: 248 }]);
+touch("touchend",   [{ identifier: 10, clientX: 640, clientY: 248 }]);
+check("tap toggles setting", get("settings.enemyIntros") === !before);
+touch("touchstart", [{ identifier: 11, clientX: 640, clientY: 248 }]);
+touch("touchend",   [{ identifier: 11, clientX: 640, clientY: 248 }]);
+check("tap toggles back", get("settings.enemyIntros") === before);
+touch("touchstart", [{ identifier: 12, clientX: 200, clientY: 600 }]);
+touch("touchend",   [{ identifier: 12, clientX: 200, clientY: 600 }]);
+check("tap empty space returns to title", get("state") === "title");
+frames(30);
+check("touch settings frames run clean", true);
+
 console.log(`\n${pass} checks passed — VOIDSURGE smoke test complete.`);
