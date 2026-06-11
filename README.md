@@ -83,7 +83,8 @@ A true App Store build (e.g. wrapping this with [Capacitor](https://capacitorjs.
 ## Features
 
 - **5 enemy types** with distinct AI: drifters (chase), darters (lunge), sentries (kite + shoot), orbiters (circle-strafe), titans (tanks that split on death)
-- **Boss every 5 waves** — the Void Harbinger cycles radial bursts, aimed volleys, and a telegraphed charge, and calls reinforcements below half health
+- **Boss every 5 waves, two of them alternating** — the **Void Harbinger** (wave 5, 15, 25…) cycles radial bursts, aimed volleys, and a telegraphed charge, and calls reinforcements below half health; the **Null Mother** (wave 10, 20, 30…) is an edge-hugging carrier that births endless broods and only takes full damage while her core glows open
+- **Boss modifiers** — the first fight against each boss in a run is plain; repeat encounters roll one of 5 modifiers per boss (Berserker, Bulletstorm, Warpshift, Phase Aegis, Void Leech for the Harbinger; Prolific, Armored Core, Elite Brood, Seeker Spines, Regenerator for the Mother), shown on the boss health bar and worth 30% more score
 - **13 stackable augments** — multishot, pierce, crit, orbiting sentry drones, lifesteal, shields, and more; pick 1 of 3 after each wave
 - **Combo multiplier** (up to 9x) that resets when you take a hit
 - **Synthesized audio**: laser/explosion/pickup SFX plus a looping minor-key chiptune sequencer, all Web Audio — zero sound files

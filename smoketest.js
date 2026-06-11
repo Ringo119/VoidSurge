@@ -281,4 +281,52 @@ check("tap empty space returns to title", get("state") === "title");
 frames(30);
 check("touch settings frames run clean", true);
 
+// ---- bosses: alternation, null mother, modifiers ----
+check("bosses alternate by wave",
+  get("bossIdForWave(5)") === "harbinger" && get("bossIdForWave(10)") === "mother" &&
+  get("bossIdForWave(15)") === "harbinger" && get("bossIdForWave(20)") === "mother");
+check("5 modifiers per boss",
+  get("BOSSES.harbinger.mods.length") === 5 && get("BOSSES.mother.mods.length") === 5);
+
+run("settings.enemyIntros = true;");
+run("startGame(); startWave(10);");
+run("player.maxHp = 100000; player.hp = 100000;"); // survive unattended boss fights
+frames(200); // boss spawns 2s into the wave
+check("null mother spawns on wave 10", get("boss !== null") && get("boss.id") === "mother");
+check("boss briefing popup", get("introPopup !== null") && get("introPopup.type") === "mother");
+key("Enter"); // dismiss briefing
+check("boss briefing dismisses", get("introPopup") === null);
+run("settings.enemyIntros = false;"); // keep the rest of the fight deterministic
+run("boss.spawnT = 0;");              // skip the spawn telegraph the popup froze
+frames(30);
+
+// weak point: sealed core resists damage, open core takes it all
+run("enemies.length = 0; spawnQueue.length = 0;");
+run("boss.coreT = 99; boss.coreOpen = 0; boss.hp = boss.maxHp;");
+run("bullets.length = 0; bullets.push({ x: boss.x, y: boss.y, vx: 0, vy: 0, dmg: 100, life: 1, pierce: 0, crit: false, hit: new Set() });");
+frames(1);
+check("sealed core resists damage", Math.abs(get("boss.maxHp - boss.hp") - 30) < 0.01);
+run("boss.coreOpen = 5; boss.hp = boss.maxHp;");
+run("bullets.length = 0; bullets.push({ x: boss.x, y: boss.y, vx: 0, vy: 0, dmg: 100, life: 1, pierce: 0, crit: false, hit: new Set() });");
+frames(1);
+check("open core takes full damage", Math.abs(get("boss.maxHp - boss.hp") - 100) < 0.01);
+
+// carrier behavior: broods launch even at full health
+run("enemies.length = 0; boss.broodT = 0.1; boss.coreT = 99; boss.coreOpen = 0;");
+frames(30);
+check("mother launches broods", get("enemies.length") >= 2);
+
+// modifiers arrive once a boss has been fought before in the run
+run("startWave(20);");
+frames(200);
+check("repeat mother gains modifier", get("boss !== null") && get("boss.id") === "mother" && get("boss.mod !== null && typeof boss.modName === 'string'"));
+run("startWave(15);");
+frames(200);
+check("first harbinger of the run is unmodified", get("boss !== null") && get("boss.id") === "harbinger" && get("boss.mod") === null);
+run("startWave(25);");
+frames(200);
+check("repeat harbinger gains modifier", get("boss !== null") && get("boss.id") === "harbinger" && get("boss.mod !== null"));
+frames(300);
+check("boss frames run clean", true);
+
 console.log(`\n${pass} checks passed — VOIDSURGE smoke test complete.`);

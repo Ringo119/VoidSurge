@@ -369,7 +369,8 @@ let ghostNoteT = 0;
 let recordBroken = false;
 let damagedThisWave = false;
 let introPopup = null;    // { type, t } — freezes play while a new hostile is briefed
-let seenThisRun = {};     // enemy types already introduced this run
+let seenThisRun = {};     // enemy/boss types already introduced this run
+let bossEncounters = {};  // per-run fight counts; repeat encounters gain modifiers
 
 // ---------- Stars (parallax background) ----------
 const stars = [];
@@ -482,16 +483,20 @@ const ENEMY_TYPES = {
   }
 })();
 
+// First sighting of a type this run pops the intel briefing (if enabled)
+function maybeBrief(type) {
+  if (seenThisRun[type]) return;
+  seenThisRun[type] = true;
+  if (settings.enemyIntros && state === "play") {
+    introPopup = { type, t: 0 };
+    releaseAllTouches();
+    Sound.tone(180, 0.3, "sawtooth", 0.12, 90);
+  }
+}
+
 function spawnEnemy(type, x, y, scale = 1) {
   const t = ENEMY_TYPES[type];
-  if (!seenThisRun[type]) {
-    seenThisRun[type] = true;
-    if (settings.enemyIntros && state === "play") {
-      introPopup = { type, t: 0 };
-      releaseAllTouches();
-      Sound.tone(180, 0.3, "sawtooth", 0.12, 90);
-    }
-  }
+  maybeBrief(type);
   enemies.push({
     type, x, y, r: t.r,
     hp: t.hp * scale, maxHp: t.hp * scale,
@@ -564,17 +569,62 @@ function startWave(n) {
   spawnTimer = 0;
 }
 
+// ---------- Bosses ----------
+// Two bosses alternate: Harbinger on wave 5, Mother on 10, Harbinger on 15...
+// The first fight against each boss in a run is plain; repeat encounters get
+// a random modifier from that boss's set of 5.
+const BOSSES = {
+  harbinger: {
+    name: "VOID HARBINGER", color: "#ff2255", r: 52, hp: 600, speed: 60, dmg: 25, score: 400,
+    desc: "cycles radial bursts, aimed volleys, and a telegraphed charge. calls reinforcements when wounded.",
+    mods: [
+      { id: "berserk", name: "BERSERKER",   desc: "faster — and charges twice" },
+      { id: "storm",   name: "BULLETSTORM", desc: "denser, faster volleys" },
+      { id: "warp",    name: "WARPSHIFT",   desc: "teleports beside you to charge" },
+      { id: "aegis",   name: "PHASE AEGIS", desc: "periodically immune to damage" },
+      { id: "leech",   name: "VOID LEECH",  desc: "heals whenever it hurts you" },
+    ],
+  },
+  mother: {
+    name: "NULL MOTHER", color: "#9bff4d", r: 64, hp: 780, speed: 40, dmg: 22, score: 500,
+    desc: "edge-hugging carrier that births endless broods. her core only takes full damage while it glows open.",
+    mods: [
+      { id: "prolific", name: "PROLIFIC",     desc: "broods launch faster and bigger" },
+      { id: "bulwark",  name: "ARMORED CORE", desc: "tougher shell, briefer openings" },
+      { id: "elite",    name: "ELITE BROOD",  desc: "births veteran hunters" },
+      { id: "seeker",   name: "SEEKER SPINES", desc: "her shots track your ship" },
+      { id: "regen",    name: "REGENERATOR",  desc: "heals while her core is sealed" },
+    ],
+  },
+};
+
+function bossIdForWave(n) {
+  return Math.floor(n / 5) % 2 === 1 ? "harbinger" : "mother";
+}
+
 function spawnBoss(scale) {
+  const id = bossIdForWave(wave);
+  const def = BOSSES[id];
+  bossEncounters[id] = (bossEncounters[id] || 0) + 1;
+  const mod = bossEncounters[id] > 1 ? pick(def.mods) : null;
   const [x, y] = edgeSpawnPos();
   boss = {
-    x, y, r: 52,
-    hp: 600 * scale, maxHp: 600 * scale,
-    speed: 60, dmg: 25, score: Math.round(400 * scale),
-    color: "#ff2255",
+    id, x, y, r: def.r,
+    hp: def.hp * scale, maxHp: def.hp * scale,
+    speed: def.speed, dmg: def.dmg, score: Math.round(def.score * scale * (mod ? 1.3 : 1)),
+    color: def.color,
     phase: 0, phaseT: 3, fireT: 1.5, angle: 0,
     charging: 0, chargeAngle: 0, hitFlash: 0, spawnT: 1, minionT: 8,
-    scale,
+    chargesLeft: 0, shieldT: 8, shielded: 0,                        // harbinger
+    coreT: 4, coreOpen: 0, broodT: 3,                               // mother
+    edgeA: Math.atan2(y - H / 2, x - W / 2), edgeDir: Math.random() < 0.5 ? 1 : -1, edgeT: rand(4, 8),
+    scale, mod: mod ? mod.id : null, modName: mod ? mod.name : null,
   };
+  if (mod) {
+    spawnText(W / 2, H * 0.42, mod.name + " — " + mod.desc, def.color, 18);
+    toast(def.name + " MODIFIER: " + mod.name);
+  }
+  maybeBrief(id);
 }
 
 // ---------- Spawn helpers ----------
@@ -637,6 +687,10 @@ function damagePlayer(dmg, src = "the void") {
   flashAlpha = 0.45;
   shake = Math.min(shake + 10, 20);
   Sound.hurt();
+  if (src === "boss" && boss && boss.mod === "leech" && boss.spawnT <= 0) {
+    boss.hp = Math.min(boss.maxHp, boss.hp + boss.maxHp * 0.05);
+    spawnText(boss.x, boss.y - boss.r - 16, "SIPHON", "#ff7a9c", 14);
+  }
   spawnParticles(player.x, player.y, "#ff3d6e", 14, 200, 0.5);
   if (player.hp <= 0) {
     player.hp = 0;
@@ -674,6 +728,7 @@ function startGame() {
   lastRunRank = -1;
   introPopup = null;
   seenThisRun = {};
+  bossEncounters = {};
   score = 0; combo = 1; comboTimer = 0;
   bullets = []; enemyBullets = []; enemies = []; particles = []; pickups = []; texts = []; drones = [];
   boss = null;
@@ -1027,9 +1082,9 @@ function updateEnemies(dt) {
   }
 }
 
-function enemyShoot(x, y, angle, speed, dmg, src) {
+function enemyShoot(x, y, angle, speed, dmg, src, home = 0) {
   Sound.enemyShoot();
-  enemyBullets.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, dmg, life: 4, r: 5, src });
+  enemyBullets.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, dmg, life: 4, r: 5, src, home });
 }
 
 function updateBoss(dt) {
@@ -1037,14 +1092,41 @@ function updateBoss(dt) {
   const b = boss;
   if (b.hitFlash > 0) b.hitFlash -= dt;
   if (b.spawnT > 0) { b.spawnT -= dt; return; }
+  if (b.id === "mother") updateMother(b, dt);
+  else updateHarbinger(b, dt);
+  // touch damage
+  if (dist2(b.x, b.y, player.x, player.y) < (b.r + player.r) * (b.r + player.r)) {
+    damagePlayer(b.dmg, "boss");
+  }
+}
+
+function harbingerCharge(b) {
+  if (b.mod === "warp") {
+    // blink to the player's flank before winding up
+    spawnParticles(b.x, b.y, b.color, 30, 280, 0.6, 4);
+    const a = rand(0, TAU);
+    b.x = clamp(player.x + Math.cos(a) * 300, 70, W - 70);
+    b.y = clamp(player.y + Math.sin(a) * 300, 70, H - 70);
+    spawnParticles(b.x, b.y, b.color, 30, 280, 0.6, 4);
+    Sound.dash();
+  }
+  b.charging = 1.0;
+  b.chargeAngle = angleTo(b.x, b.y, player.x, player.y);
+}
+
+function updateHarbinger(b, dt) {
   const aToP = angleTo(b.x, b.y, player.x, player.y);
   b.angle = lerp(b.angle, aToP, 1 - Math.pow(0.05, dt));
+  const spd = b.mod === "berserk" ? 1.35 : 1;
 
   b.phaseT -= dt;
   if (b.phaseT <= 0) {
     b.phase = (b.phase + 1) % 3;
     b.phaseT = b.phase === 2 ? 2.2 : rand(3.5, 5);
-    if (b.phase === 2) { b.charging = 1.0; b.chargeAngle = aToP; }
+    if (b.phase === 2) {
+      b.chargesLeft = b.mod === "berserk" ? 2 : 1;
+      harbingerCharge(b);
+    }
   }
 
   if (b.phase === 2 && b.charging > 0) {
@@ -1054,14 +1136,19 @@ function updateBoss(dt) {
       // windup, shake in place
       b.x += rand(-2, 2); b.y += rand(-2, 2);
     } else {
-      b.x += Math.cos(b.chargeAngle) * 480 * dt;
-      b.y += Math.sin(b.chargeAngle) * 480 * dt;
+      b.x += Math.cos(b.chargeAngle) * 480 * spd * dt;
+      b.y += Math.sin(b.chargeAngle) * 480 * spd * dt;
       spawnParticles(b.x, b.y, b.color, 2, 60, 0.3, 4);
+    }
+    if (b.charging <= 0 && b.chargesLeft > 1) {
+      b.chargesLeft--;
+      b.phaseT += 2.2;
+      harbingerCharge(b);
     }
   } else {
     // drift toward player
-    b.x += Math.cos(aToP) * b.speed * dt;
-    b.y += Math.sin(aToP) * b.speed * dt;
+    b.x += Math.cos(aToP) * b.speed * spd * dt;
+    b.y += Math.sin(aToP) * b.speed * spd * dt;
   }
   b.x = clamp(b.x, -80, W + 80);
   b.y = clamp(b.y, -80, H + 80);
@@ -1069,18 +1156,34 @@ function updateBoss(dt) {
   // attacks
   b.fireT -= dt;
   if (b.fireT <= 0) {
+    const storm = b.mod === "storm";
     if (b.phase === 0) {
       // radial burst
-      b.fireT = 1.7;
-      const n = 14 + Math.floor(b.scale * 2);
+      b.fireT = storm ? 1.25 : 1.7;
+      const n = Math.round((14 + Math.floor(b.scale * 2)) * (storm ? 1.7 : 1));
       const off = rand(0, TAU);
       for (let i = 0; i < n; i++) enemyShoot(b.x, b.y, off + (TAU * i / n), 170, b.dmg * 0.5, "boss");
     } else if (b.phase === 1) {
       // aimed spread volley
-      b.fireT = 0.9;
-      for (let i = -2; i <= 2; i++) enemyShoot(b.x, b.y, aToP + i * 0.16, 280, b.dmg * 0.5, "boss");
+      b.fireT = storm ? 0.7 : 0.9;
+      const k = storm ? 3 : 2;
+      for (let i = -k; i <= k; i++) enemyShoot(b.x, b.y, aToP + i * 0.16, 280, b.dmg * 0.5, "boss");
     } else {
       b.fireT = 1.2;
+    }
+  }
+
+  // phase aegis: periodic damage immunity
+  if (b.mod === "aegis") {
+    if (b.shielded > 0) b.shielded -= dt;
+    else {
+      b.shieldT -= dt;
+      if (b.shieldT <= 0) {
+        b.shieldT = 8;
+        b.shielded = 2.5;
+        spawnText(b.x, b.y - b.r - 16, "PHASE AEGIS", "#7df9ff", 13);
+        Sound.tone(520, 0.2, "sine", 0.1, 1040);
+      }
     }
   }
 
@@ -1093,10 +1196,64 @@ function updateBoss(dt) {
       spawnText(b.x, b.y - b.r - 16, "REINFORCEMENTS", b.color, 13);
     }
   }
+}
 
-  // touch damage
-  if (dist2(b.x, b.y, player.x, player.y) < (b.r + player.r) * (b.r + player.r)) {
-    damagePlayer(b.dmg, "boss");
+function updateMother(b, dt) {
+  const aToP = angleTo(b.x, b.y, player.x, player.y);
+  b.angle = lerp(b.angle, aToP, 1 - Math.pow(0.2, dt)); // slow turret turn
+
+  // patrol an ellipse hugging the arena rim — she never chases
+  b.edgeT -= dt;
+  if (b.edgeT <= 0) { b.edgeT = rand(4, 8); b.edgeDir *= -1; }
+  b.edgeA += b.edgeDir * 0.16 * dt;
+  const tx = W / 2 + Math.cos(b.edgeA) * (W / 2 - 90);
+  const ty = H / 2 + Math.sin(b.edgeA) * (H / 2 - 80);
+  b.x += (tx - b.x) * Math.min(1, dt * 1.2);
+  b.y += (ty - b.y) * Math.min(1, dt * 1.2);
+
+  // core cycle: armored while sealed, vulnerable while open
+  if (b.coreOpen > 0) {
+    b.coreOpen -= dt;
+    if (b.coreOpen <= 0) b.coreT = b.mod === "bulwark" ? 6.5 : 5.5;
+  } else {
+    b.coreT -= dt;
+    if (b.coreT <= 0) {
+      b.coreOpen = b.mod === "bulwark" ? 2.2 : 3.2;
+      spawnText(b.x, b.y - b.r - 18, "CORE EXPOSED", "#ffe066", 15);
+      Sound.tone(880, 0.25, "sine", 0.12, 440);
+    }
+  }
+
+  if (b.mod === "regen" && b.coreOpen <= 0) {
+    b.hp = Math.min(b.maxHp, b.hp + b.maxHp * 0.012 * dt);
+  }
+
+  // brood bays
+  b.broodT -= dt;
+  if (b.broodT <= 0) {
+    b.broodT = b.mod === "prolific" ? 2.8 : 4.5;
+    const count = b.mod === "prolific" ? 3 : 2;
+    const pool = b.mod === "elite" ? ["sentry", "orbiter", "darter"] : ["drifter", "darter"];
+    for (let i = 0; i < count; i++) {
+      spawnEnemy(pick(pool), b.x + rand(-50, 50), b.y + rand(-50, 50), 1 + wave * 0.04);
+    }
+    spawnText(b.x, b.y - b.r - 18, "BROOD LAUNCHED", b.color, 13);
+    Sound.tone(240, 0.18, "square", 0.07, 120);
+  }
+
+  // weapons: aimed fans while sealed, panicked radials while exposed
+  b.fireT -= dt;
+  if (b.fireT <= 0) {
+    const home = b.mod === "seeker" ? 1.4 : 0;
+    if (b.coreOpen > 0) {
+      b.fireT = 1.4;
+      const n = 10 + Math.floor(b.scale * 2);
+      const off = rand(0, TAU);
+      for (let i = 0; i < n; i++) enemyShoot(b.x, b.y, off + (TAU * i / n), 150, b.dmg * 0.5, "boss", home);
+    } else {
+      b.fireT = 2.0;
+      for (let i = -1; i <= 1; i++) enemyShoot(b.x, b.y, aToP + i * 0.22, 230, b.dmg * 0.5, "boss", home);
+    }
   }
 }
 
@@ -1131,16 +1288,21 @@ function updateBullets(dt) {
     // vs boss
     if (!consumed && boss && boss.spawnT <= 0 && !b.hit.has(boss)) {
       if (dist2(b.x, b.y, boss.x, boss.y) < (boss.r + 5) * (boss.r + 5)) {
-        boss.hp -= b.dmg;
-        boss.hitFlash = 0.06;
+        // mother's sealed core shrugs off most damage; aegis phases block all of it
+        let mul = 1;
+        if (boss.id === "mother" && boss.coreOpen <= 0) mul = boss.mod === "bulwark" ? 0.1 : 0.3;
+        if (boss.shielded > 0) mul = 0;
+        boss.hp -= b.dmg * mul;
+        boss.hitFlash = mul > 0 ? 0.06 : 0.02;
         Sound.hit();
-        spawnParticles(b.x, b.y, boss.color, 5, 140, 0.3, 3);
-        if (b.crit) spawnText(b.x, b.y - 14, Math.round(b.dmg) + "!", "#ffe066", 15);
+        if (mul === 0 && Math.random() < 0.3) spawnText(b.x, b.y - 12, "IMMUNE", "#7df9ff", 12);
+        spawnParticles(b.x, b.y, mul === 1 ? boss.color : "#8aa8c8", mul === 1 ? 5 : 2, 140, 0.3, 3);
+        if (b.crit && mul > 0) spawnText(b.x, b.y - 14, Math.round(b.dmg * mul) + "!", "#ffe066", 15);
         b.hit.add(boss);
         if (b.pierce > 0) b.pierce--; else consumed = true;
         if (boss.hp <= 0) {
           stats.kills++; stats.bosses++; bump(stats.killsBy, "boss");
-          unlock("crimson");
+          if (boss.id === "harbinger") unlock("crimson");
           Sound.boom(true);
           spawnParticles(boss.x, boss.y, boss.color, 70, 360, 1.2, 6);
           spawnParticles(boss.x, boss.y, "#ffe066", 40, 280, 1.0, 4);
@@ -1148,7 +1310,7 @@ function updateBullets(dt) {
           const pts = boss.score * combo;
           score += pts;
           spawnText(boss.x, boss.y, "+" + pts, "#ffe066", 24);
-          spawnText(W / 2, H / 2 - 90, "BOSS DESTROYED", "#ff2255", 26);
+          spawnText(W / 2, H / 2 - 90, BOSSES[boss.id].name + " DESTROYED", boss.color, 26);
           spawnPickup(boss.x - 20, boss.y, "heal");
           spawnPickup(boss.x + 20, boss.y, "gem");
           spawnPickup(boss.x, boss.y + 20, "gem");
@@ -1163,6 +1325,15 @@ function updateBullets(dt) {
 function updateEnemyBullets(dt) {
   for (let i = enemyBullets.length - 1; i >= 0; i--) {
     const b = enemyBullets[i];
+    if (b.home) {
+      // curve toward the player at a capped turn rate (rad/s)
+      const cur = Math.atan2(b.vy, b.vx);
+      const want = angleTo(b.x, b.y, player.x, player.y);
+      const diff = ((want - cur + Math.PI * 3) % TAU) - Math.PI;
+      const na = cur + clamp(diff, -b.home * dt, b.home * dt);
+      const spd = Math.hypot(b.vx, b.vy);
+      b.vx = Math.cos(na) * spd; b.vy = Math.sin(na) * spd;
+    }
     b.x += b.vx * dt; b.y += b.vy * dt;
     b.life -= dt;
     if (b.life <= 0 || b.x < -20 || b.x > W + 20 || b.y < -20 || b.y > H + 20) {
@@ -1499,21 +1670,44 @@ function traceEnemyShape(type, r, wobble) {
       }
       break;
     }
+    case "harbinger": { // 12-point star hull
+      for (let i = 0; i < 12; i++) {
+        const a = TAU * i / 12 + wobble * 0.05;
+        const rr = i % 2 === 0 ? r : r * 0.72;
+        const x = Math.cos(a) * rr, y = Math.sin(a) * rr;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      break;
+    }
+    case "mother": { // wide carrier octagon
+      for (let i = 0; i < 8; i++) {
+        const a = TAU * i / 8 + TAU / 16 + wobble * 0.04;
+        const x = Math.cos(a) * r * 1.12, y = Math.sin(a) * r * 0.72;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      break;
+    }
   }
 }
 
-function drawEnemyDetail(type, r, color) { // eye/ring accents, drawn at the origin
+function drawEnemyDetail(type, r, color) { // eye/ring/core accents, drawn at the origin
   if (type === "sentry") {
     ctx.fillStyle = color;
     ctx.beginPath();
     ctx.arc(0, 0, Math.max(3, r * 0.28), 0, TAU);
     ctx.fill();
   }
-  if (type === "titan") {
+  if (type === "titan" || type === "harbinger") {
     ctx.strokeStyle = color;
     ctx.beginPath();
-    ctx.arc(0, 0, r * 0.5, 0, TAU);
+    ctx.arc(0, 0, r * (type === "harbinger" ? 0.45 : 0.5), 0, TAU);
     ctx.stroke();
+  }
+  if (type === "harbinger" || type === "mother") {
+    ctx.fillStyle = type === "mother" ? "#ffe066" : color;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.2, 0, TAU);
+    ctx.fill();
   }
 }
 
@@ -1545,39 +1739,102 @@ function drawBoss() {
   ctx.rotate(b.angle);
   neon(b.color, 22);
   ctx.strokeStyle = flash ? "#fff" : b.color;
-  ctx.fillStyle = flash ? "rgba(255,255,255,0.4)" : "rgba(60,8,20,0.9)";
   ctx.lineWidth = 3;
-  // outer star-hex hull
-  ctx.beginPath();
-  for (let i = 0; i < 12; i++) {
-    const a = TAU * i / 12;
-    const r = i % 2 === 0 ? b.r : b.r * 0.72;
-    const x = Math.cos(a) * r, y = Math.sin(a) * r;
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+
+  if (b.id === "mother") {
+    // carrier hull: wide flattened octagon
+    ctx.fillStyle = flash ? "rgba(255,255,255,0.4)" : "rgba(18,38,8,0.92)";
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = TAU * i / 8 + TAU / 16;
+      const x = Math.cos(a) * b.r * 1.12, y = Math.sin(a) * b.r * 0.72;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // brood bay slits
+    ctx.strokeStyle = flash ? "#fff" : "rgba(155,255,77,0.5)";
+    ctx.lineWidth = 2;
+    for (const s of [-1, 1]) {
+      ctx.beginPath();
+      ctx.arc(0, 0, b.r * 0.8, s * 0.45 - 0.25, s * 0.45 + 0.25);
+      ctx.stroke();
+    }
+    // core: armored while sealed, blazing while open
+    const open = b.coreOpen > 0;
+    const pulse = 0.6 + 0.4 * Math.sin(time * (open ? 10 : 3));
+    ctx.fillStyle = flash ? "#fff" : open ? "#ffe066" : "rgba(155,255,77,0.35)";
+    ctx.globalAlpha = open ? pulse : 0.8;
+    ctx.beginPath();
+    ctx.arc(0, 0, open ? 15 : 11, 0, TAU);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    if (open) {
+      neon("#ffe066", 18);
+      ctx.strokeStyle = "#ffe066";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, 20 + Math.sin(time * 8) * 3, 0, TAU);
+      ctx.stroke();
+    } else {
+      // rotating armor plates seal the core
+      ctx.save();
+      ctx.rotate(time * 0.8);
+      ctx.strokeStyle = flash ? "#fff" : b.color;
+      ctx.lineWidth = 4;
+      for (let i = 0; i < 3; i++) {
+        const a = TAU * i / 3;
+        ctx.beginPath();
+        ctx.arc(0, 0, 16, a, a + TAU / 3 - 0.5);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  } else {
+    // harbinger: outer star-hex hull
+    ctx.fillStyle = flash ? "rgba(255,255,255,0.4)" : "rgba(60,8,20,0.9)";
+    ctx.beginPath();
+    for (let i = 0; i < 12; i++) {
+      const a = TAU * i / 12;
+      const r = i % 2 === 0 ? b.r : b.r * 0.72;
+      const x = Math.cos(a) * r, y = Math.sin(a) * r;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // rotating inner ring
+    ctx.save();
+    ctx.rotate(time * 1.5);
+    ctx.strokeStyle = flash ? "#fff" : "#ff7a9c";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+      const a = TAU * i / 3;
+      ctx.moveTo(Math.cos(a) * b.r * 0.45, Math.sin(a) * b.r * 0.45);
+      ctx.lineTo(Math.cos(a + TAU / 6) * b.r * 0.45, Math.sin(a + TAU / 6) * b.r * 0.45);
+    }
+    ctx.stroke();
+    ctx.restore();
+    // core
+    const pulse = 0.7 + 0.3 * Math.sin(time * 6);
+    ctx.fillStyle = flash ? "#fff" : b.color;
+    ctx.globalAlpha = pulse;
+    ctx.beginPath();
+    ctx.arc(0, 0, 10, 0, TAU);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    // phase aegis: immunity bubble
+    if (b.shielded > 0) {
+      neon("#7df9ff", 16);
+      ctx.strokeStyle = "rgba(125,249,255,0.8)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, b.r + 10 + Math.sin(time * 5) * 2, 0, TAU);
+      ctx.stroke();
+    }
   }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  // rotating inner ring
-  ctx.save();
-  ctx.rotate(time * 1.5);
-  ctx.strokeStyle = flash ? "#fff" : "#ff7a9c";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  for (let i = 0; i < 3; i++) {
-    const a = TAU * i / 3;
-    ctx.moveTo(Math.cos(a) * b.r * 0.45, Math.sin(a) * b.r * 0.45);
-    ctx.lineTo(Math.cos(a + TAU / 6) * b.r * 0.45, Math.sin(a + TAU / 6) * b.r * 0.45);
-  }
-  ctx.stroke();
-  ctx.restore();
-  // core
-  const pulse = 0.7 + 0.3 * Math.sin(time * 6);
-  ctx.fillStyle = flash ? "#fff" : b.color;
-  ctx.globalAlpha = pulse;
-  ctx.beginPath();
-  ctx.arc(0, 0, 10, 0, TAU);
-  ctx.fill();
   ctx.restore();
 
   // charge telegraph line
@@ -1728,13 +1985,13 @@ function drawHUD() {
     const bby = H - 38 - SAFE.b;
     ctx.fillStyle = "rgba(0,0,0,0.55)";
     ctx.fillRect(W / 2 - bbw / 2 - 2, bby, bbw + 4, 16);
-    ctx.fillStyle = "#ff2255";
+    ctx.fillStyle = boss.color;
     ctx.fillRect(W / 2 - bbw / 2, bby + 2, bbw * clamp(boss.hp / boss.maxHp, 0, 1), 12);
     ctx.strokeStyle = "rgba(255,255,255,0.3)";
     ctx.strokeRect(W / 2 - bbw / 2 - 2, bby, bbw + 4, 16);
-    ctx.fillStyle = "#ff7a9c";
+    ctx.fillStyle = boss.color;
     ctx.font = "bold 12px 'Courier New', monospace";
-    ctx.fillText("VOID HARBINGER", W / 2, bby - 6);
+    ctx.fillText(BOSSES[boss.id].name + (boss.modName ? " · " + boss.modName : ""), W / 2, bby - 6);
   }
 
   // wave banner
@@ -1742,9 +1999,9 @@ function drawHUD() {
     const a = clamp(Math.min(waveBannerT, 2.2 - waveBannerT) * 2, 0, 1);
     ctx.globalAlpha = a;
     ctx.font = "bold 44px 'Courier New', monospace";
-    ctx.fillStyle = wave % 5 === 0 ? "#ff2255" : "#7df9ff";
+    ctx.fillStyle = wave % 5 === 0 ? BOSSES[bossIdForWave(wave)].color : "#7df9ff";
     neon(ctx.fillStyle, 20);
-    ctx.fillText(wave % 5 === 0 ? "⚠ BOSS WAVE ⚠" : "WAVE " + wave, W / 2, H * 0.32);
+    ctx.fillText(wave % 5 === 0 ? "⚠ " + BOSSES[bossIdForWave(wave)].name + " ⚠" : "WAVE " + wave, W / 2, H * 0.32);
     ctx.globalAlpha = 1;
   }
 
@@ -2156,7 +2413,8 @@ function drawSettings() {
 }
 
 function drawEnemyIntro() {
-  const t = ENEMY_TYPES[introPopup.type];
+  const isBoss = !!BOSSES[introPopup.type];
+  const t = ENEMY_TYPES[introPopup.type] || BOSSES[introPopup.type];
   const a = clamp(introPopup.t / 0.25, 0, 1); // pop-in
   ctx.save();
   ctx.globalAlpha = a * 0.78;
@@ -2178,7 +2436,7 @@ function drawEnemyIntro() {
   ctx.textAlign = "center";
   ctx.font = "bold 12px 'Courier New', monospace";
   ctx.fillStyle = "#ff7a9c";
-  ctx.fillText("⚠ NEW HOSTILE DETECTED ⚠", W / 2, py + 26);
+  ctx.fillText(isBoss ? "⚠ PRIORITY TARGET DETECTED ⚠" : "⚠ NEW HOSTILE DETECTED ⚠", W / 2, py + 26);
 
   // live sprite, wobbling like the real thing
   ctx.save();
