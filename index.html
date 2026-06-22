@@ -240,12 +240,24 @@ function onTouchStart(e) {
       mode = "survival"; startGame();
       return;
     }
-    if (state === "campaign_map") { state = "title"; return; }
+    if (state === "campaign_map") {
+      const lvlId = campaignLevelAt(x, y);
+      if (lvlId) { currentLevelId = lvlId; mode = "campaign"; startGame(); return; }
+      state = "title"; return;
+    }
+    if (state === "level_complete") {
+      if (levelCompleteT > 0.5) {
+        const r = levelCompleteRects();
+        if (inRect(x, y, r.retry)) { startGame(); return; }
+        state = "campaign_map";
+      }
+      return;
+    }
     if (state === "scores" || state === "stats") { state = "title"; return; }
     if (state === "ships") { if (!shipCardAction(x, y)) state = "title"; return; }
     if (state === "settings") { if (!settingAction(x, y)) state = "title"; return; }
     if (state === "over") {
-      if (gameOverT > 0.4 && inRect(x, y, overMenuRect())) state = "title";
+      if (gameOverT > 0.4 && inRect(x, y, overMenuRect())) state = mode === "campaign" ? "campaign_map" : "title";
       else if (gameOverT > 0.8) startGame();
       return;
     }
@@ -305,7 +317,7 @@ if (typeof document.addEventListener === "function") {
 }
 
 // ---------- Game state ----------
-const VERSION = "1.6.0"; // bump alongside the sw.js cache when shipping
+const VERSION = "1.7.0"; // bump alongside the sw.js cache when shipping
 
 // The arena is a fixed-size world, independent of screen size; a camera
 // follows the player and clamps at the world border. Screens larger than
@@ -321,9 +333,13 @@ function updateCamera(dt) {
   cam.y += (ty - cam.y) * k;
 }
 
-let state = "title";          // title | play | upgrade | over | campaign_map
+let state = "title";          // title | play | upgrade | over | campaign_map | level_complete
 let mode = "survival";        // "survival" | "campaign"
 let currentLevelId = 0;       // active level in campaign mode (0 = none)
+let campaignDmgTaken = 0;     // cumulative damage taken in the current campaign run
+let levelCompleteT = 0;       // time since level_complete screen appeared
+let levelCompleteStars = 0;   // stars earned on the just-finished level
+let levelCompleteLevel = null; // level def object for the completed level
 let paused = false;
 let wave = 0;
 let score = 0;
@@ -636,16 +652,18 @@ function startWave(n) {
   spawnQueue = [];
   boss = null;
 
-  if (n % 5 === 0) {
+  const _lvl = mode === "campaign" && currentLevelId ? LEVELS.find(l => l.id === currentLevelId) : null;
+  const _isBossWave = _lvl ? n === _lvl.waves + 1 : n % 5 === 0;
+  if (_isBossWave) {
     // Boss wave
     bossWarnT = 2.0;
     Sound.bossWarn();
-    const scale = 1 + (n / 5 - 1) * 0.55;
-    setTimeout(() => {}, 0);
+    const scale = _lvl ? 1 + (_lvl.id - 1) * 0.35 : 1 + (n / 5 - 1) * 0.55;
     spawnQueue.push({ boss: true, scale, delay: 2.0 });
-    // a few escorts
-    const escorts = Math.min(3 + Math.floor(n / 5), 8);
-    for (let i = 0; i < escorts; i++) spawnQueue.push({ type: pick(["drifter", "darter"]), scale: 1 + n * 0.04, delay: 3 + i * 1.2 });
+    // a few escorts from the level's pool (or default for survival)
+    const escortPool = _lvl ? _lvl.enemyPool.slice(0, 2) : ["drifter", "darter"];
+    const escorts = _lvl ? Math.min(2 + _lvl.id, 5) : Math.min(3 + Math.floor(n / 5), 8);
+    for (let i = 0; i < escorts; i++) spawnQueue.push({ type: pick(escortPool), scale: 1 + n * 0.04, delay: 3 + i * 1.2 });
   } else {
     Sound.wave();
     const budget = 5 + n * 2.4;
@@ -653,7 +671,8 @@ function startWave(n) {
     let b = budget, d = 0.4;
     const weights = Object.keys(ENEMY_TYPES).map(k => {
       const t = ENEMY_TYPES[k];
-      return [k, t.cost, n >= t.intro ? t.weight : 0];
+      const inPool = !_lvl || _lvl.enemyPool.includes(k);
+      return [k, t.cost, inPool && n >= t.intro ? t.weight : 0];
     });
     const totalW = weights.reduce((s, w) => s + w[2], 0);
     while (b > 0) {
@@ -701,7 +720,8 @@ function bossIdForWave(n) {
 }
 
 function spawnBoss(scale) {
-  const id = bossIdForWave(wave);
+  const _campaignLvl = mode === "campaign" && currentLevelId ? LEVELS.find(l => l.id === currentLevelId) : null;
+  const id = _campaignLvl ? _campaignLvl.boss : bossIdForWave(wave);
   const def = BOSSES[id];
   bossEncounters[id] = (bossEncounters[id] || 0) + 1;
   const mod = bossEncounters[id] > 1 ? pick(def.mods) : null;
@@ -785,6 +805,7 @@ function damagePlayer(dmg, src = "the void") {
     return;
   }
   player.hp -= dmg;
+  if (mode === "campaign") campaignDmgTaken += dmg;
   player.invuln = 1.0;
   combo = 1; comboTimer = 0;
   flashAlpha = 0.45;
@@ -822,6 +843,29 @@ function gameOver() {
   saveStats();
 }
 
+function levelComplete(lvl) {
+  const stars = campaignDmgTaken === 0 ? 3 : campaignDmgTaken <= player.maxHp * 0.4 ? 2 : 1;
+  const prog = campaignProgress[lvl.id] || {};
+  campaignProgress[lvl.id] = {
+    unlocked: true,
+    completed: true,
+    stars: Math.max(stars, prog.stars || 0),
+    bestScore: Math.max(score, prog.bestScore || 0),
+  };
+  // Unlock next level
+  const nextId = lvl.id + 1;
+  if (nextId <= LEVELS.length) {
+    if (!campaignProgress[nextId]) campaignProgress[nextId] = { unlocked: true, completed: false, stars: 0, bestScore: 0 };
+    else campaignProgress[nextId].unlocked = true;
+  }
+  saveCampaignProgress();
+  levelCompleteT = 0;
+  levelCompleteStars = stars;
+  levelCompleteLevel = lvl;
+  state = "level_complete";
+  Sound.upgrade(); // victory chime
+}
+
 function startGame() {
   resetPlayer();
   for (const k in taken) delete taken[k];
@@ -833,6 +877,7 @@ function startGame() {
   seenThisRun = {};
   bossEncounters = {};
   score = 0; combo = 1; comboTimer = 0;
+  if (mode === "campaign") campaignDmgTaken = 0;
   bullets = []; enemyBullets = []; enemies = []; particles = []; pickups = []; texts = []; drones = [];
   boss = null;
   startWave(1);
@@ -862,8 +907,15 @@ function handleKeyPress(code) {
     }
     return;
   }
+  if (state === "level_complete") {
+    if (levelCompleteT > 0.5) {
+      if (code === "Enter" || code === "KeyR") { startGame(); return; }
+      if (code === "Escape" || code === "KeyT" || code === "KeyC") { state = "campaign_map"; return; }
+    }
+    return;
+  }
   if (state === "over") {
-    if (code === "KeyT") { state = "title"; return; }
+    if (code === "KeyT") { state = mode === "campaign" ? "campaign_map" : "title"; return; }
     if ((code === "Enter" || code === "KeyR") && gameOverT > 0.8) { startGame(); return; }
   }
   if (state === "upgrade") {
@@ -897,7 +949,19 @@ function handleClick() {
     if (mb === "campaign") { mode = "campaign"; state = "campaign_map"; return; }
     mode = "survival"; startGame(); return;
   }
-  if (state === "campaign_map") { state = "title"; return; }
+  if (state === "campaign_map") {
+    const lvlId = campaignLevelAt(mouse.x, mouse.y);
+    if (lvlId) { currentLevelId = lvlId; mode = "campaign"; startGame(); return; }
+    state = "title"; return;
+  }
+  if (state === "level_complete") {
+    if (levelCompleteT > 0.5) {
+      const r = levelCompleteRects();
+      if (inRect(mouse.x, mouse.y, r.retry)) { startGame(); return; }
+      if (inRect(mouse.x, mouse.y, r.map)) { state = "campaign_map"; return; }
+    }
+    return;
+  }
   if (state === "scores" || state === "stats") { state = "title"; return; }
   if (state === "ships") {
     if (!shipCardAction(mouse.x, mouse.y)) state = "title";
@@ -908,7 +972,9 @@ function handleClick() {
     return;
   }
   if (state === "over") {
-    if (gameOverT > 0.4 && inRect(mouse.x, mouse.y, overMenuRect())) { state = "title"; return; }
+    if (gameOverT > 0.4 && inRect(mouse.x, mouse.y, overMenuRect())) {
+      state = mode === "campaign" ? "campaign_map" : "title"; return;
+    }
     if (gameOverT > 0.8) startGame();
     return;
   }
@@ -962,6 +1028,7 @@ function update(dt) {
   updateTexts(dt);
 
   if (state === "over") { gameOverT += dt; return; }
+  if (state === "level_complete") { levelCompleteT += dt; return; }
   if (state !== "play" || paused) return;
   if (introPopup) { introPopup.t += dt; return; } // new-hostile briefing freezes play
 
@@ -993,10 +1060,14 @@ function update(dt) {
     saveStats();
     score += wave * 25;
     spawnText(cam.x + W / 2, cam.y + H / 2 - 60, "WAVE CLEAR  +" + (wave * 25), "#7df9ff", 22);
-    setTimeout(() => {}, 0);
-    rollUpgrades();
-    state = "upgrade";
-    hoveredCard = -1;
+    const _finLvl = mode === "campaign" && currentLevelId ? LEVELS.find(l => l.id === currentLevelId) : null;
+    if (_finLvl && wave === _finLvl.waves + 1) {
+      levelComplete(_finLvl);
+    } else {
+      rollUpgrades();
+      state = "upgrade";
+      hoveredCard = -1;
+    }
   }
 }
 
@@ -1656,13 +1727,14 @@ function render() {
 
   drawStars();
 
-  if (state === "title" || state === "scores" || state === "stats" || state === "ships" || state === "settings" || state === "campaign_map") {
+  if (state === "title" || state === "scores" || state === "stats" || state === "ships" || state === "settings" || state === "campaign_map" || state === "level_complete") {
     drawGrid();
     if (state === "title") drawTitle();
     else if (state === "scores") drawScores();
     else if (state === "stats") drawStats();
     else if (state === "settings") drawSettings();
     else if (state === "campaign_map") drawCampaignMap();
+    else if (state === "level_complete") drawLevelComplete();
     else drawShips();
     drawParticles();
     drawToasts();
@@ -2836,63 +2908,187 @@ function drawSettings() {
   ctx.restore();
 }
 
-function drawCampaignMap() {
-  drawMenuChrome("CAMPAIGN", TOUCH.active ? "tap anywhere to go back" : "[ESC] back");
-  ctx.save();
+function campaignLevelRects() {
+  const rw = Math.min(520, W * 0.82);
+  const lh = Math.max(46, Math.min(68, (H * 0.70) / LEVELS.length));
+  const y0 = H * 0.22;
+  return LEVELS.map((lvl, i) => ({
+    id: lvl.id,
+    x: W / 2 - rw / 2,
+    y: y0 + i * lh,
+    w: rw,
+    h: lh - 6,
+  }));
+}
 
-  const lh = Math.min(56, (H * 0.62) / LEVELS.length);
-  const y0 = H * 0.29;
+function campaignLevelAt(x, y) {
+  const rects = campaignLevelRects();
+  for (const r of rects) {
+    if (inRect(x, y, r)) {
+      const prog = getCampaignLevelData(r.id);
+      return prog.unlocked ? r.id : null;
+    }
+  }
+  return null;
+}
+
+function levelCompleteRects() {
+  const bw = Math.min(160, (W - 80) / 2 - 10), bh = Math.max(44, 52), gap = 16;
+  const x0 = W / 2 - (bw * 2 + gap) / 2;
+  const y = H * 0.78;
+  return {
+    retry: { x: x0,            y, w: bw, h: bh },
+    map:   { x: x0 + bw + gap, y, w: bw, h: bh },
+  };
+}
+
+function drawCampaignMap() {
+  drawMenuChrome("CAMPAIGN", TOUCH.active ? "tap a level to play · tap empty space to go back" : "[ESC] back · click a level to play");
+  ctx.save();
+  const rects = campaignLevelRects();
 
   LEVELS.forEach((lvl, i) => {
     const prog = getCampaignLevelData(lvl.id);
-    const y = y0 + i * lh;
+    const r = rects[i];
     const locked = !prog.unlocked;
-    const col = locked ? "#3a4a5a" : "#7df9ff";
+    const completed = !!prog.completed;
+    const col = locked ? "#3a4a5a" : (completed ? "#ffe066" : "#7df9ff");
+    const hov = !TOUCH.active && !locked && inRect(mouse.x, mouse.y, r);
 
-    const rw = Math.min(520, W * 0.78), rh = lh - 10;
-    const rx = W / 2 - rw / 2, ry = y - rh * 0.56;
-    const hov = !TOUCH.active && !locked &&
-      mouse.x >= rx && mouse.x <= rx + rw && mouse.y >= ry && mouse.y <= ry + rh;
-
-    ctx.fillStyle = hov ? "rgba(20,26,46,0.95)" : "rgba(10,14,28,0.6)";
-    ctx.strokeStyle = hov ? "#ffe066" : (locked ? "#1e2a36" : "#2a4a5e");
-    ctx.lineWidth = 1.5;
-    roundRect(rx, ry, rw, rh, 6);
+    ctx.fillStyle = hov ? "rgba(20,26,46,0.95)" : (locked ? "rgba(8,10,18,0.5)" : "rgba(10,14,28,0.75)");
+    ctx.strokeStyle = hov ? "#ffe066" : (locked ? "#1e2a36" : (completed ? "#7a6a20" : "#2a4a5e"));
+    ctx.lineWidth = hov ? 2 : 1.5;
+    roundRect(r.x, r.y, r.w, r.h, 6);
     ctx.fill();
     if (hov) neon("#ffe066", 6);
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    ctx.font = "bold 11px 'Courier New', monospace";
+    const cy = r.y + r.h / 2 + 5;
+
+    // Level number badge
+    ctx.font = "bold 10px 'Courier New', monospace";
     ctx.fillStyle = locked ? "#2e3e4e" : "#4a7a9a";
     ctx.textAlign = "left";
-    ctx.fillText("LV" + lvl.id, rx + 12, y + 4);
+    ctx.fillText(locked ? "🔒" : ("0" + lvl.id).slice(-2), r.x + 10, cy);
 
-    ctx.font = "bold 13px 'Courier New', monospace";
-    ctx.fillStyle = col;
+    // Level name
+    ctx.font = `bold ${Math.min(13, r.h * 0.28)}px 'Courier New', monospace`;
+    ctx.fillStyle = hov ? "#ffe066" : col;
     ctx.textAlign = "center";
-    ctx.fillText(locked ? "— LOCKED —" : lvl.name, rx + rw / 2, y + 4);
+    ctx.fillText(locked ? "— LOCKED —" : lvl.name, r.x + r.w / 2, cy);
 
-    ctx.font = "10px 'Courier New', monospace";
-    ctx.fillStyle = locked ? "#2e3e4e" : "#4a6a7a";
+    // Sector label
+    ctx.font = "9px 'Courier New', monospace";
+    ctx.fillStyle = locked ? "#1e2e3e" : "#3a5a6a";
     ctx.textAlign = "right";
-    ctx.fillText(lvl.sector, rx + rw - 10, y + 4);
+    ctx.fillText(lvl.sector, r.x + r.w - 10, r.y + r.h * 0.3 + 4);
 
+    // Waves info
+    ctx.font = "9px 'Courier New', monospace";
+    ctx.fillStyle = locked ? "#1e2e3e" : "#3a5a6a";
+    ctx.textAlign = "right";
+    ctx.fillText(lvl.waves + " waves", r.x + r.w - 10, cy);
+
+    // Stars
     if (!locked) {
       const starCount = prog.stars || 0;
+      const starX = r.x + r.w * 0.58;
       for (let s = 0; s < 3; s++) {
         ctx.fillStyle = s < starCount ? "#ffe066" : "#2a3a4a";
-        ctx.font = "11px 'Courier New', monospace";
+        ctx.font = "12px 'Courier New', monospace";
         ctx.textAlign = "left";
-        ctx.fillText("★", rx + 52 + s * 14, y + 4);
+        ctx.fillText("★", starX + s * 16, r.y + r.h * 0.3 + 4);
       }
     }
   });
 
+  // Footer hint
   ctx.textAlign = "center";
-  ctx.font = "11px 'Courier New', monospace";
-  ctx.fillStyle = "#3a5a6a";
-  ctx.fillText("LEVEL SELECT — COMING IN A FUTURE UPDATE", W / 2, H * 0.93);
+  ctx.font = "10px 'Courier New', monospace";
+  ctx.fillStyle = "#2a3a4a";
+  ctx.fillText("complete levels to earn stars · 3★ = no damage taken", W / 2, H * 0.95);
+
+  ctx.restore();
+}
+
+function drawLevelComplete() {
+  drawGrid();
+  ctx.save();
+
+  const lvl = levelCompleteLevel;
+  if (!lvl) { ctx.restore(); return; }
+
+  const a = clamp(levelCompleteT * 1.8, 0, 0.88);
+  ctx.fillStyle = `rgba(2,3,10,${a})`;
+  ctx.fillRect(0, 0, W, H);
+
+  if (levelCompleteT < 0.25) { ctx.restore(); return; }
+
+  ctx.textAlign = "center";
+  neon("#27e8a7", 24);
+  ctx.font = `bold ${Math.min(W * 0.08, 56)}px 'Courier New', monospace`;
+  ctx.fillStyle = "#27e8a7";
+  ctx.fillText("LEVEL COMPLETE", W / 2, H * 0.25);
+  ctx.shadowBlur = 0;
+
+  ctx.font = "bold 16px 'Courier New', monospace";
+  ctx.fillStyle = "#7df9ff";
+  ctx.fillText(lvl.name, W / 2, H * 0.25 + 34);
+
+  // Animated stars
+  const starSize = Math.min(W * 0.08, 44);
+  const gap = starSize * 1.4;
+  const sx0 = W / 2 - gap;
+  for (let s = 0; s < 3; s++) {
+    const delay = 0.4 + s * 0.3;
+    const pop = clamp((levelCompleteT - delay) / 0.2, 0, 1);
+    const earned = s < levelCompleteStars;
+    ctx.save();
+    ctx.globalAlpha = pop;
+    ctx.font = `${Math.round(starSize * pop)}px 'Courier New', monospace`;
+    ctx.fillStyle = earned ? "#ffe066" : "#2a3a4a";
+    if (earned) neon("#ffe066", 12 * pop);
+    ctx.fillText("★", sx0 + s * gap, H * 0.47);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  // Star description
+  if (levelCompleteT > 1.4) {
+    const desc = levelCompleteStars === 3 ? "FLAWLESS — no damage taken!"
+               : levelCompleteStars === 2 ? "SOLID RUN — took some hits"
+               : "SURVIVED — the void was relentless";
+    ctx.font = "bold 13px 'Courier New', monospace";
+    ctx.fillStyle = "#8aa8c8";
+    ctx.fillText(desc, W / 2, H * 0.56);
+
+    ctx.font = "bold 18px 'Courier New', monospace";
+    ctx.fillStyle = "#ffe066";
+    ctx.fillText("SCORE  " + score.toLocaleString(), W / 2, H * 0.63);
+  }
+
+  // Action buttons
+  if (levelCompleteT > 0.5) {
+    const r = levelCompleteRects();
+    for (const [key, btn] of [["retry", r.retry], ["map", r.map]]) {
+      const hov = !TOUCH.active && inRect(mouse.x, mouse.y, btn);
+      ctx.fillStyle = hov ? "rgba(20,26,46,0.95)" : "rgba(10,14,28,0.8)";
+      ctx.strokeStyle = hov ? "#ffe066" : "#3a6f8a";
+      ctx.lineWidth = hov ? 2.5 : 1.5;
+      roundRect(btn.x, btn.y, btn.w, btn.h, 10);
+      ctx.fill();
+      if (hov) neon("#ffe066", 8);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.font = "bold 13px 'Courier New', monospace";
+      ctx.fillStyle = hov ? "#ffe066" : "#cfe8ff";
+      ctx.fillText(
+        key === "retry" ? (TOUCH.active ? "REPLAY" : "REPLAY [R]") : (TOUCH.active ? "MAP" : "MAP [ESC]"),
+        btn.x + btn.w / 2, btn.y + btn.h / 2 + 5
+      );
+    }
+  }
 
   ctx.restore();
 }
@@ -3102,22 +3298,30 @@ function drawGameOver() {
     ctx.fillText("SCORE  " + score.toLocaleString(), W / 2, H * 0.48);
     ctx.font = "bold 15px 'Courier New', monospace";
     ctx.fillStyle = "#8aa8c8";
-    ctx.fillText("reached wave " + wave, W / 2, H * 0.48 + 28);
-    if (score >= highScore && score > 0) {
-      ctx.fillStyle = "#27e8a7";
-      neon("#27e8a7", 10);
-      ctx.fillText("★ NEW HIGH SCORE ★", W / 2, H * 0.48 + 56);
-      ctx.shadowBlur = 0;
-    } else if (lastRunRank >= 0) {
-      ctx.fillStyle = "#7df9ff";
-      ctx.fillText("#" + (lastRunRank + 1) + " ON YOUR TOP 10", W / 2, H * 0.48 + 56);
+    if (mode === "campaign" && currentLevelId) {
+      const lvl = LEVELS.find(l => l.id === currentLevelId);
+      ctx.fillText(lvl ? "fell on " + lvl.name + " — wave " + wave : "wave " + wave, W / 2, H * 0.48 + 28);
+    } else {
+      ctx.fillText("reached wave " + wave, W / 2, H * 0.48 + 28);
+      if (score >= highScore && score > 0) {
+        ctx.fillStyle = "#27e8a7";
+        neon("#27e8a7", 10);
+        ctx.fillText("★ NEW HIGH SCORE ★", W / 2, H * 0.48 + 56);
+        ctx.shadowBlur = 0;
+      } else if (lastRunRank >= 0) {
+        ctx.fillStyle = "#7df9ff";
+        ctx.fillText("#" + (lastRunRank + 1) + " ON YOUR TOP 10", W / 2, H * 0.48 + 56);
+      }
     }
   }
   if (gameOverT > 0.8 && Math.floor(time * 1.6) % 2 === 0) {
     ctx.font = "bold 17px 'Courier New', monospace";
     ctx.fillStyle = "#7df9ff";
     ctx.textAlign = "center";
-    ctx.fillText(TOUCH.active ? "TAP TO DIVE AGAIN" : "CLICK OR PRESS R TO DIVE AGAIN", W / 2, H * 0.7);
+    const retryLabel = mode === "campaign"
+      ? (TOUCH.active ? "TAP TO RETRY LEVEL" : "CLICK OR PRESS R TO RETRY")
+      : (TOUCH.active ? "TAP TO DIVE AGAIN" : "CLICK OR PRESS R TO DIVE AGAIN");
+    ctx.fillText(retryLabel, W / 2, H * 0.7);
   }
   if (gameOverT > 0.8) {
     const r = overMenuRect();
@@ -3131,7 +3335,10 @@ function drawGameOver() {
     ctx.font = "bold 13px 'Courier New', monospace";
     ctx.fillStyle = hov ? "#ffe066" : "#8aa8c8";
     ctx.textAlign = "center";
-    ctx.fillText(TOUCH.active ? "MENU" : "MENU [T]", r.x + r.w / 2, r.y + 21);
+    const menuLabel = mode === "campaign"
+      ? (TOUCH.active ? "MAP" : "MAP [T]")
+      : (TOUCH.active ? "MENU" : "MENU [T]");
+    ctx.fillText(menuLabel, r.x + r.w / 2, r.y + 21);
   }
   ctx.restore();
 }
