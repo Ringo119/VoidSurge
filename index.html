@@ -2482,12 +2482,12 @@ function drawTitle() {
 
   ctx.font = "bold 15px 'Courier New', monospace";
   ctx.fillStyle = "#cfe8ff";
-  const cy = H * 0.52;
+  const cy = TOUCH.active ? H * 0.48 : H * 0.52;
+  const lineSpacing = TOUCH.active ? 24 : 28;
   const lines = TOUCH.active ? [
-    ["LEFT THUMB", "drag to move"],
-    ["RIGHT THUMB", "drag to aim + fire"],
+    ["LEFT THUMB",  "move"],
+    ["RIGHT THUMB", "aim + fire"],
     ["DASH BUTTON", "dash (i-frames)"],
-    ["TAP A CARD", "pick upgrades between waves"],
   ] : [
     ["WASD / ARROWS", "move"],
     ["MOUSE", "aim  +  hold to fire"],
@@ -2497,10 +2497,10 @@ function drawTitle() {
   lines.forEach((l, i) => {
     ctx.fillStyle = "#7df9ff";
     ctx.textAlign = "right";
-    ctx.fillText(l[0], W / 2 - 14, cy + i * 28);
+    ctx.fillText(l[0], W / 2 - 14, cy + i * lineSpacing);
     ctx.fillStyle = "#8aa8c8";
     ctx.textAlign = "left";
-    ctx.fillText(l[1], W / 2 + 14, cy + i * 28);
+    ctx.fillText(l[1], W / 2 + 14, cy + i * lineSpacing);
   });
 
   // Mode select buttons
@@ -2520,6 +2520,14 @@ function drawTitle() {
     ctx.font = "bold 15px 'Courier New', monospace";
     ctx.textAlign = "center";
     ctx.fillText(b.label + (TOUCH.active ? "" : "  [" + b.key + "]"), b.x + b.w / 2, b.y + b.h / 2 + 5);
+  }
+
+  if (TOUCH.active) {
+    const [b0] = modeBtnRects();
+    ctx.font = "11px 'Courier New', monospace";
+    ctx.fillStyle = "#4a6a7a";
+    ctx.textAlign = "center";
+    ctx.fillText("or tap anywhere to play in SURVIVAL", W / 2, b0.y + b0.h + 16);
   }
 
   if (highScore > 0) {
@@ -2563,9 +2571,15 @@ function titleButtonAt(x, y) {
 }
 
 function modeBtnRects() {
-  const bw = Math.min(180, (W - 80) / 2 - 10), bh = Math.min(44, H * 0.07), gap = Math.min(20, W * 0.03);
+  const bw = Math.min(180, (W - 80) / 2 - 10);
+  const bh = Math.max(44, Math.min(54, H * 0.11)); // always ≥44px for touch comfort
+  const gap = Math.min(20, W * 0.03);
   const x0 = W / 2 - (bw * 2 + gap) / 2;
-  const y = H * 0.72;
+  // anchor below the controls list so buttons never overlap it
+  const lineCount = TOUCH.active ? 3 : 4;
+  const lineSpacing = TOUCH.active ? 24 : 28;
+  const cy = TOUCH.active ? H * 0.48 : H * 0.52;
+  const y = cy + (lineCount - 1) * lineSpacing + Math.max(16, H * 0.04);
   return [
     { id: "campaign", label: "CAMPAIGN", key: "C",     x: x0,            y, w: bw, h: bh },
     { id: "survival", label: "SURVIVAL", key: "ENTER", x: x0 + bw + gap, y, w: bw, h: bh },
