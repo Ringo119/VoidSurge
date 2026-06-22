@@ -234,9 +234,13 @@ function onTouchStart(e) {
     const p = eventXY(t), x = p.x, y = p.y;
     if (state === "title") {
       const b = titleButtonAt(x, y);
-      if (b) state = b; else startGame();
+      if (b) { state = b; return; }
+      const mb = modeBtnAt(x, y);
+      if (mb === "campaign") { mode = "campaign"; state = "campaign_map"; return; }
+      mode = "survival"; startGame();
       return;
     }
+    if (state === "campaign_map") { state = "title"; return; }
     if (state === "scores" || state === "stats") { state = "title"; return; }
     if (state === "ships") { if (!shipCardAction(x, y)) state = "title"; return; }
     if (state === "settings") { if (!settingAction(x, y)) state = "title"; return; }
@@ -301,7 +305,7 @@ if (typeof document.addEventListener === "function") {
 }
 
 // ---------- Game state ----------
-const VERSION = "1.5.2"; // bump alongside the sw.js cache when shipping
+const VERSION = "1.6.0"; // bump alongside the sw.js cache when shipping
 
 // The arena is a fixed-size world, independent of screen size; a camera
 // follows the player and clamps at the world border. Screens larger than
@@ -317,7 +321,9 @@ function updateCamera(dt) {
   cam.y += (ty - cam.y) * k;
 }
 
-let state = "title";          // title | play | upgrade | over
+let state = "title";          // title | play | upgrade | over | campaign_map
+let mode = "survival";        // "survival" | "campaign"
+let currentLevelId = 0;       // active level in campaign mode (0 = none)
 let paused = false;
 let wave = 0;
 let score = 0;
@@ -398,6 +404,15 @@ function toggleSetting(id) {
   settings[id] = !settings[id];
   saveJSON("voidsurge_settings", settings);
   Sound.pickup();
+}
+
+// ---------- Campaign progress (persistent) ----------
+let campaignProgress = loadJSON("voidsurge_campaign", {});
+if (!campaignProgress[1]) campaignProgress[1] = { unlocked: true, completed: false, stars: 0, bestScore: 0 };
+else campaignProgress[1].unlocked = true;
+function saveCampaignProgress() { saveJSON("voidsurge_campaign", campaignProgress); }
+function getCampaignLevelData(id) {
+  return Object.assign({ unlocked: id === 1, completed: false, stars: 0, bestScore: 0 }, campaignProgress[id] || {});
 }
 
 // run-scoped meta state
@@ -538,6 +553,28 @@ const ENEMY_TYPES = {
     used[t.intro] = true;
   }
 })();
+
+// ---------- Campaign level definitions ----------
+const LEVELS = [
+  { id: 1, name: "NEBULA BREACH", sector: "SECTOR 1", waves: 4, boss: "harbinger",
+    enemyPool: ["drifter", "darter"],
+    lore: "First contact. The void is hungry." },
+  { id: 2, name: "VOID CORRIDOR", sector: "SECTOR 1", waves: 5, boss: "mother",
+    enemyPool: ["drifter", "darter", "sentry", "orbiter"],
+    lore: "Deeper in. They have been waiting." },
+  { id: 3, name: "PULSE GATE",    sector: "SECTOR 2", waves: 5, boss: "harbinger",
+    enemyPool: ["drifter", "darter", "sentry", "orbiter", "titan", "shielder"],
+    lore: "Ancient defenders hold the gate." },
+  { id: 4, name: "NULL THRONE",   sector: "SECTOR 2", waves: 6, boss: "mother",
+    enemyPool: ["drifter", "darter", "sentry", "orbiter", "titan", "shielder", "weaver", "phantom"],
+    lore: "Her throne room. Tread carefully." },
+  { id: 5, name: "DEAD SIGNAL",   sector: "SECTOR 3", waves: 6, boss: "harbinger",
+    enemyPool: ["drifter", "darter", "sentry", "orbiter", "titan", "shielder", "weaver", "phantom", "minelayer"],
+    lore: "No transmissions reach the outside." },
+  { id: 6, name: "THE SURGE",     sector: "SECTOR 3", waves: 7, boss: "mother",
+    enemyPool: ["drifter", "darter", "sentry", "orbiter", "titan", "shielder", "weaver", "phantom", "minelayer", "reaver"],
+    lore: "The void itself rises to consume you." },
+];
 
 // First sighting of a type this run pops the intel briefing (if enabled)
 function maybeBrief(type) {
@@ -806,13 +843,14 @@ function handleKeyPress(code) {
   Sound.init(); Sound.resume();
   if (code === "KeyM") { Sound.muted = !Sound.muted; return; }
   if (state === "title") {
-    if (code === "Enter" || code === "Space") { startGame(); return; }
+    if (code === "Enter" || code === "Space") { mode = "survival"; startGame(); return; }
+    if (code === "KeyC") { mode = "campaign"; state = "campaign_map"; return; }
     if (code === "KeyH") { state = "scores"; return; }
     if (code === "KeyS") { state = "stats"; return; }
-    if (code === "KeyC") { state = "ships"; return; }
+    if (code === "KeyV") { state = "ships"; return; }
     if (code === "KeyO") { state = "settings"; return; }
   }
-  if (state === "scores" || state === "stats" || state === "ships" || state === "settings") {
+  if (state === "scores" || state === "stats" || state === "ships" || state === "settings" || state === "campaign_map") {
     if (code === "Escape" || code === "KeyB") { state = "title"; return; }
     if (state === "ships") {
       const m = /^Digit([1-8])$/.exec(code);
@@ -855,8 +893,11 @@ function handleClick() {
   if (state === "title") {
     const b = titleButtonAt(mouse.x, mouse.y);
     if (b) { state = b; return; }
-    startGame(); return;
+    const mb = modeBtnAt(mouse.x, mouse.y);
+    if (mb === "campaign") { mode = "campaign"; state = "campaign_map"; return; }
+    mode = "survival"; startGame(); return;
   }
+  if (state === "campaign_map") { state = "title"; return; }
   if (state === "scores" || state === "stats") { state = "title"; return; }
   if (state === "ships") {
     if (!shipCardAction(mouse.x, mouse.y)) state = "title";
@@ -1615,12 +1656,13 @@ function render() {
 
   drawStars();
 
-  if (state === "title" || state === "scores" || state === "stats" || state === "ships" || state === "settings") {
+  if (state === "title" || state === "scores" || state === "stats" || state === "ships" || state === "settings" || state === "campaign_map") {
     drawGrid();
     if (state === "title") drawTitle();
     else if (state === "scores") drawScores();
     else if (state === "stats") drawStats();
     else if (state === "settings") drawSettings();
+    else if (state === "campaign_map") drawCampaignMap();
     else drawShips();
     drawParticles();
     drawToasts();
@@ -2440,12 +2482,12 @@ function drawTitle() {
 
   ctx.font = "bold 15px 'Courier New', monospace";
   ctx.fillStyle = "#cfe8ff";
-  const cy = H * 0.52;
+  const cy = TOUCH.active ? H * 0.48 : H * 0.52;
+  const lineSpacing = TOUCH.active ? 24 : 28;
   const lines = TOUCH.active ? [
-    ["LEFT THUMB", "drag to move"],
-    ["RIGHT THUMB", "drag to aim + fire"],
+    ["LEFT THUMB",  "move"],
+    ["RIGHT THUMB", "aim + fire"],
     ["DASH BUTTON", "dash (i-frames)"],
-    ["TAP A CARD", "pick upgrades between waves"],
   ] : [
     ["WASD / ARROWS", "move"],
     ["MOUSE", "aim  +  hold to fire"],
@@ -2455,19 +2497,37 @@ function drawTitle() {
   lines.forEach((l, i) => {
     ctx.fillStyle = "#7df9ff";
     ctx.textAlign = "right";
-    ctx.fillText(l[0], W / 2 - 14, cy + i * 28);
+    ctx.fillText(l[0], W / 2 - 14, cy + i * lineSpacing);
     ctx.fillStyle = "#8aa8c8";
     ctx.textAlign = "left";
-    ctx.fillText(l[1], W / 2 + 14, cy + i * 28);
+    ctx.fillText(l[1], W / 2 + 14, cy + i * lineSpacing);
   });
 
+  // Mode select buttons
   ctx.textAlign = "center";
-  if (Math.floor(time * 1.6) % 2 === 0) {
-    ctx.font = "bold 20px 'Courier New', monospace";
-    ctx.fillStyle = "#ffe066";
-    neon("#ffe066", 12);
-    ctx.fillText(TOUCH.active ? "TAP TO BEGIN" : "CLICK OR PRESS ENTER TO BEGIN", W / 2, H * 0.78);
+  for (const b of modeBtnRects()) {
+    const hov = !TOUCH.active && inRect(mouse.x, mouse.y, b);
+    const col = b.id === "campaign" ? "#ffe066" : "#7df9ff";
+    ctx.fillStyle = hov ? "rgba(20,26,46,0.95)" : "rgba(10,14,28,0.8)";
+    ctx.strokeStyle = hov ? col : "#3a6f8a";
+    ctx.lineWidth = hov ? 2.5 : 1.5;
+    roundRect(b.x, b.y, b.w, b.h, 10);
+    ctx.fill();
+    if (hov) neon(col, 10);
+    ctx.stroke();
     ctx.shadowBlur = 0;
+    ctx.fillStyle = hov ? col : "#cfe8ff";
+    ctx.font = "bold 15px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(b.label + (TOUCH.active ? "" : "  [" + b.key + "]"), b.x + b.w / 2, b.y + b.h / 2 + 5);
+  }
+
+  if (TOUCH.active) {
+    const [b0] = modeBtnRects();
+    ctx.font = "11px 'Courier New', monospace";
+    ctx.fillStyle = "#4a6a7a";
+    ctx.textAlign = "center";
+    ctx.fillText("or tap anywhere to play in SURVIVAL", W / 2, b0.y + b0.h + 16);
   }
 
   if (highScore > 0) {
@@ -2500,13 +2560,34 @@ function titleButtons() {
   return [
     { id: "scores",   label: "SCORES",   key: "H", x: x0, y, w: bw, h: bh },
     { id: "stats",    label: "STATS",    key: "S", x: x0 + bw + gap, y, w: bw, h: bh },
-    { id: "ships",    label: "SHIPS",    key: "C", x: x0 + (bw + gap) * 2, y, w: bw, h: bh },
+    { id: "ships",    label: "SHIPS",    key: "V", x: x0 + (bw + gap) * 2, y, w: bw, h: bh },
     { id: "settings", label: "SETTINGS", key: "O", x: x0 + (bw + gap) * 3, y, w: bw, h: bh },
   ];
 }
 
 function titleButtonAt(x, y) {
   const b = titleButtons().find(b => inRect(x, y, b));
+  return b ? b.id : null;
+}
+
+function modeBtnRects() {
+  const bw = Math.min(180, (W - 80) / 2 - 10);
+  const bh = Math.max(44, Math.min(54, H * 0.11)); // always ≥44px for touch comfort
+  const gap = Math.min(20, W * 0.03);
+  const x0 = W / 2 - (bw * 2 + gap) / 2;
+  // anchor below the controls list so buttons never overlap it
+  const lineCount = TOUCH.active ? 3 : 4;
+  const lineSpacing = TOUCH.active ? 24 : 28;
+  const cy = TOUCH.active ? H * 0.48 : H * 0.52;
+  const y = cy + (lineCount - 1) * lineSpacing + Math.max(16, H * 0.04);
+  return [
+    { id: "campaign", label: "CAMPAIGN", key: "C",     x: x0,            y, w: bw, h: bh },
+    { id: "survival", label: "SURVIVAL", key: "ENTER", x: x0 + bw + gap, y, w: bw, h: bh },
+  ];
+}
+
+function modeBtnAt(x, y) {
+  const b = modeBtnRects().find(b => inRect(x, y, b));
   return b ? b.id : null;
 }
 
@@ -2752,6 +2833,67 @@ function drawSettings() {
     ctx.fillStyle = on ? "#27e8a7" : "#ff3d6e";
     ctx.fillText(on ? "ON" : "OFF", px + pw / 2, py + ph / 2 + 4);
   });
+  ctx.restore();
+}
+
+function drawCampaignMap() {
+  drawMenuChrome("CAMPAIGN", TOUCH.active ? "tap anywhere to go back" : "[ESC] back");
+  ctx.save();
+
+  const lh = Math.min(56, (H * 0.62) / LEVELS.length);
+  const y0 = H * 0.29;
+
+  LEVELS.forEach((lvl, i) => {
+    const prog = getCampaignLevelData(lvl.id);
+    const y = y0 + i * lh;
+    const locked = !prog.unlocked;
+    const col = locked ? "#3a4a5a" : "#7df9ff";
+
+    const rw = Math.min(520, W * 0.78), rh = lh - 10;
+    const rx = W / 2 - rw / 2, ry = y - rh * 0.56;
+    const hov = !TOUCH.active && !locked &&
+      mouse.x >= rx && mouse.x <= rx + rw && mouse.y >= ry && mouse.y <= ry + rh;
+
+    ctx.fillStyle = hov ? "rgba(20,26,46,0.95)" : "rgba(10,14,28,0.6)";
+    ctx.strokeStyle = hov ? "#ffe066" : (locked ? "#1e2a36" : "#2a4a5e");
+    ctx.lineWidth = 1.5;
+    roundRect(rx, ry, rw, rh, 6);
+    ctx.fill();
+    if (hov) neon("#ffe066", 6);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    ctx.font = "bold 11px 'Courier New', monospace";
+    ctx.fillStyle = locked ? "#2e3e4e" : "#4a7a9a";
+    ctx.textAlign = "left";
+    ctx.fillText("LV" + lvl.id, rx + 12, y + 4);
+
+    ctx.font = "bold 13px 'Courier New', monospace";
+    ctx.fillStyle = col;
+    ctx.textAlign = "center";
+    ctx.fillText(locked ? "— LOCKED —" : lvl.name, rx + rw / 2, y + 4);
+
+    ctx.font = "10px 'Courier New', monospace";
+    ctx.fillStyle = locked ? "#2e3e4e" : "#4a6a7a";
+    ctx.textAlign = "right";
+    ctx.fillText(lvl.sector, rx + rw - 10, y + 4);
+
+    if (!locked) {
+      const starCount = prog.stars || 0;
+      for (let s = 0; s < 3; s++) {
+        ctx.fillStyle = s < starCount ? "#ffe066" : "#2a3a4a";
+        ctx.font = "11px 'Courier New', monospace";
+        ctx.textAlign = "left";
+        ctx.fillText("★", rx + 52 + s * 14, y + 4);
+      }
+    }
+  });
+
+  ctx.textAlign = "center";
+  ctx.font = "11px 'Courier New', monospace";
+  ctx.fillStyle = "#3a5a6a";
+  ctx.fillText("LEVEL SELECT — COMING IN A FUTURE UPDATE", W / 2, H * 0.93);
+
   ctx.restore();
 }
 

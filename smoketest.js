@@ -225,7 +225,10 @@ key("Escape"); check("escape returns to title", get("state") === "title");
 key("KeyS"); check("stats screen opens", get("state") === "stats");
 frames(10);
 key("Escape");
-key("KeyC"); check("hangar opens", get("state") === "ships");
+key("KeyC"); check("campaign map opens", get("state") === "campaign_map");
+frames(10);
+key("Escape"); check("campaign map back to title", get("state") === "title");
+key("KeyV"); check("hangar opens", get("state") === "ships");
 frames(10);
 
 // unlock + equip a skin
