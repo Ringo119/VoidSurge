@@ -408,10 +408,11 @@ touch("touchstart", [{ identifier: 14, clientX: 120, clientY: 200 }]); // game (
 touch("touchend",   [{ identifier: 14, clientX: 120, clientY: 200 }]);
 check("rotated tap returns to title", get("state") === "title");
 
-// start a run and drive the move stick through rotated coords
-touch("touchstart", [{ identifier: 15, clientX: 400, clientY: 640 }]); // game (640,320): empty title space
+// start a run via survival button through rotated coords
+// portrait: game W=1280 H=720; survival btn center game(740,449) → screen clientX=271,clientY=740
+touch("touchstart", [{ identifier: 15, clientX: 271, clientY: 740 }]); // survival button
 check("rotated tap starts game", get("state") === "play");
-touch("touchend", [{ identifier: 15, clientX: 400, clientY: 640 }]);
+touch("touchend", [{ identifier: 15, clientX: 271, clientY: 740 }]);
 run("enemies.length = 0; spawnQueue.length = 0; waveActive = false;");
 touch("touchstart", [{ identifier: 16, clientX: 220, clientY: 200 }]); // game (200,500): left half = move stick
 touch("touchmove",  [{ identifier: 16, clientX: 220, clientY: 280 }]); // drag to game (280,500): +x
