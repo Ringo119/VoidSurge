@@ -1,5 +1,5 @@
 // VOIDSURGE service worker: cache-first so the game works offline once installed.
-const CACHE = "voidsurge-v10"; // bump whenever shipped files change so installed PWAs update
+const CACHE = "voidsurge-v11"; // bump whenever shipped files change so installed PWAs update
 const ASSETS = [
   "./",
   "./index.html",
