@@ -236,8 +236,8 @@ function onTouchStart(e) {
       const b = titleButtonAt(x, y);
       if (b) { state = b; return; }
       const mb = modeBtnAt(x, y);
-      if (mb === "campaign") { mode = "campaign"; state = "campaign_map"; return; }
-      mode = "survival"; startGame();
+      if (mb === "campaign") { mode = "campaign"; seenInCampaign = {}; state = "campaign_map"; return; }
+      if (mb === "survival") { mode = "survival"; startGame(); return; }
       return;
     }
     if (state === "campaign_map") {
@@ -458,6 +458,7 @@ let recordBroken = false;
 let damagedThisWave = false;
 let introPopup = null;    // { type, t } — freezes play while a new hostile is briefed
 let seenThisRun = {};     // enemy/boss types already introduced this run
+let seenInCampaign = {};  // enemy/boss types already briefed in the current campaign session
 let bossEncounters = {};  // per-run fight counts; repeat encounters gain modifiers
 
 // ---------- Stars (parallax background) ----------
@@ -611,10 +612,14 @@ const LEVELS = [
     lore: "The void itself rises to consume you." },
 ];
 
-// First sighting of a type this run pops the intel briefing (if enabled)
+// First sighting of a type this run/campaign pops the intel briefing (if enabled)
 function maybeBrief(type) {
   if (seenThisRun[type]) return;
   seenThisRun[type] = true;
+  if (mode === "campaign") {
+    if (seenInCampaign[type]) return;
+    seenInCampaign[type] = true;
+  }
   if (settings.enemyIntros && state === "play") {
     introPopup = { type, t: 0 };
     releaseAllTouches();
@@ -920,7 +925,7 @@ function handleKeyPress(code) {
   if (code === "KeyM") { Sound.muted = !Sound.muted; return; }
   if (state === "title") {
     if (code === "Enter" || code === "Space") { mode = "survival"; startGame(); return; }
-    if (code === "KeyC") { mode = "campaign"; state = "campaign_map"; return; }
+    if (code === "KeyC") { mode = "campaign"; seenInCampaign = {}; state = "campaign_map"; return; }
     if (code === "KeyH") { state = "scores"; return; }
     if (code === "KeyS") { state = "stats"; return; }
     if (code === "KeyV") { state = "ships"; return; }
@@ -986,8 +991,9 @@ function handleClick() {
     const b = titleButtonAt(mouse.x, mouse.y);
     if (b) { state = b; return; }
     const mb = modeBtnAt(mouse.x, mouse.y);
-    if (mb === "campaign") { mode = "campaign"; state = "campaign_map"; return; }
-    mode = "survival"; startGame(); return;
+    if (mb === "campaign") { mode = "campaign"; seenInCampaign = {}; state = "campaign_map"; return; }
+    if (mb === "survival") { mode = "survival"; startGame(); return; }
+    return;
   }
   if (state === "campaign_map") {
     const lvlId = campaignLevelAt(mouse.x, mouse.y);
@@ -1418,6 +1424,28 @@ function updateEnemies(dt) {
       // knock enemy back a bit
       e.x -= Math.cos(aToP) * 20;
       e.y -= Math.sin(aToP) * 20;
+    }
+  }
+
+  // Separate overlapping enemies so they can't stack inside each other
+  for (let i = 0; i < enemies.length - 1; i++) {
+    const a = enemies[i];
+    if (a.spawnT > 0) continue;
+    for (let j = i + 1; j < enemies.length; j++) {
+      const b = enemies[j];
+      if (b.spawnT > 0) continue;
+      const minDist = a.r + b.r;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < minDist * minDist && d2 > 0) {
+        const d = Math.sqrt(d2);
+        const push = (minDist - d) * 0.5;
+        const nx = dx / d, ny = dy / d;
+        a.x -= nx * push;
+        a.y -= ny * push;
+        b.x += nx * push;
+        b.y += ny * push;
+      }
     }
   }
 }
@@ -2689,14 +2717,6 @@ function drawTitle() {
     ctx.font = "bold 15px 'Courier New', monospace";
     ctx.textAlign = "center";
     ctx.fillText(b.label + (TOUCH.active ? "" : "  [" + b.key + "]"), b.x + b.w / 2, b.y + b.h / 2 + 5);
-  }
-
-  if (TOUCH.active) {
-    const [b0] = modeBtnRects();
-    ctx.font = "11px 'Courier New', monospace";
-    ctx.fillStyle = "#4a6a7a";
-    ctx.textAlign = "center";
-    ctx.fillText("or tap anywhere to play in SURVIVAL", W / 2, b0.y + b0.h + 16);
   }
 
   if (highScore > 0) {
