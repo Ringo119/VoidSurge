@@ -317,7 +317,7 @@ if (typeof document.addEventListener === "function") {
 }
 
 // ---------- Game state ----------
-const VERSION = "1.7.0"; // bump alongside the sw.js cache when shipping
+const VERSION = "1.7.1"; // bump alongside the sw.js cache when shipping
 
 // The arena is a fixed-size world, independent of screen size; a camera
 // follows the player and clamps at the world border. Screens larger than
@@ -2418,7 +2418,29 @@ function drawHUD() {
   ctx.textAlign = "center";
   ctx.fillStyle = "#cfe8ff";
   ctx.font = "bold 16px 'Courier New', monospace";
-  ctx.fillText("WAVE " + wave, W / 2, 30 + SAFE.t);
+  if (mode === "campaign" && currentLevelId) {
+    const _hudLvl = LEVELS.find(l => l.id === currentLevelId);
+    if (_hudLvl) {
+      const isBossW = wave === _hudLvl.waves + 1;
+      ctx.fillStyle = isBossW ? BOSSES[_hudLvl.boss].color : "#cfe8ff";
+      ctx.fillText(isBossW ? "BOSS WAVE" : `WAVE ${wave} / ${_hudLvl.waves}`, W / 2, 30 + SAFE.t);
+      // wave progress pips
+      const totalPips = _hudLvl.waves + 1; // +1 for boss
+      const pipW = 8, pipGap = 5, pipH = 4;
+      const rowW = totalPips * pipW + (totalPips - 1) * pipGap;
+      const px0 = W / 2 - rowW / 2;
+      for (let p = 0; p < totalPips; p++) {
+        const done = p < wave;
+        const isBoss = p === _hudLvl.waves;
+        ctx.fillStyle = done ? (isBoss ? BOSSES[_hudLvl.boss].color : "#7df9ff") : "rgba(125,249,255,0.2)";
+        if (done) neon(isBoss ? BOSSES[_hudLvl.boss].color : "#7df9ff", 4);
+        ctx.fillRect(px0 + p * (pipW + pipGap), 38 + SAFE.t, pipW, isBoss ? pipH + 2 : pipH);
+        ctx.shadowBlur = 0;
+      }
+    }
+  } else {
+    ctx.fillText("WAVE " + wave, W / 2, 30 + SAFE.t);
+  }
   if (combo > 1) {
     const cFrac = comboTimer / 3.5;
     ctx.fillStyle = "#ffe066";
@@ -2448,9 +2470,12 @@ function drawHUD() {
     const a = clamp(Math.min(waveBannerT, 2.2 - waveBannerT) * 2, 0, 1);
     ctx.globalAlpha = a;
     ctx.font = "bold 44px 'Courier New', monospace";
-    ctx.fillStyle = wave % 5 === 0 ? BOSSES[bossIdForWave(wave)].color : "#7df9ff";
+    const _bannerLvl = mode === "campaign" && currentLevelId ? LEVELS.find(l => l.id === currentLevelId) : null;
+    const _isBannerBoss = _bannerLvl ? wave === _bannerLvl.waves + 1 : wave % 5 === 0;
+    const _bannerBossId = _bannerLvl ? _bannerLvl.boss : bossIdForWave(wave);
+    ctx.fillStyle = _isBannerBoss ? BOSSES[_bannerBossId].color : "#7df9ff";
     neon(ctx.fillStyle, 20);
-    ctx.fillText(wave % 5 === 0 ? "⚠ " + BOSSES[bossIdForWave(wave)].name + " ⚠" : "WAVE " + wave, W / 2, H * 0.32);
+    ctx.fillText(_isBannerBoss ? "⚠ " + BOSSES[_bannerBossId].name + " ⚠" : "WAVE " + wave, W / 2, H * 0.32);
     ctx.globalAlpha = 1;
   }
 
@@ -2462,6 +2487,19 @@ function drawHUD() {
     ctx.fillStyle = "#ff7a9c";
     ctx.fillText("☠ your best run died on this wave", W / 2, H * 0.32 + 30);
     ctx.globalAlpha = 1;
+  }
+
+  // campaign: level name label in bottom-left
+  if (mode === "campaign" && currentLevelId) {
+    const _nameLvl = LEVELS.find(l => l.id === currentLevelId);
+    if (_nameLvl) {
+      ctx.globalAlpha = 0.55;
+      ctx.font = "bold 10px 'Courier New', monospace";
+      ctx.textAlign = "left";
+      ctx.fillStyle = "#7df9ff";
+      ctx.fillText(_nameLvl.sector + " — " + _nameLvl.name, 20 + SAFE.l, H - 30 - SAFE.b);
+      ctx.globalAlpha = 1;
+    }
   }
 
   // mute hint (touch users get on-screen buttons instead)
