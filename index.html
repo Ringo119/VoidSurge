@@ -242,8 +242,19 @@ function onTouchStart(e) {
     }
     if (state === "campaign_map") {
       const lvlId = campaignLevelAt(x, y);
-      if (lvlId) { currentLevelId = lvlId; mode = "campaign"; startGame(); return; }
+      if (lvlId) {
+        currentLevelId = lvlId;
+        mode = "campaign";
+        levelIntroLevel = LEVELS.find(l => l.id === lvlId);
+        levelIntroT = 0;
+        state = "level_intro";
+        return;
+      }
       state = "title"; return;
+    }
+    if (state === "level_intro") {
+      if (levelIntroT > 0.5) { startGame(); return; }
+      return;
     }
     if (state === "level_complete") {
       if (levelCompleteT > 0.5) {
@@ -317,7 +328,7 @@ if (typeof document.addEventListener === "function") {
 }
 
 // ---------- Game state ----------
-const VERSION = "1.7.1"; // bump alongside the sw.js cache when shipping
+const VERSION = "1.7.2"; // bump alongside the sw.js cache when shipping
 
 // The arena is a fixed-size world, independent of screen size; a camera
 // follows the player and clamps at the world border. Screens larger than
@@ -333,10 +344,12 @@ function updateCamera(dt) {
   cam.y += (ty - cam.y) * k;
 }
 
-let state = "title";          // title | play | upgrade | over | campaign_map | level_complete
+let state = "title";          // title | play | upgrade | over | campaign_map | level_intro | level_complete
 let mode = "survival";        // "survival" | "campaign"
 let currentLevelId = 0;       // active level in campaign mode (0 = none)
 let campaignDmgTaken = 0;     // cumulative damage taken in the current campaign run
+let levelIntroT = 0;          // time since level_intro screen appeared
+let levelIntroLevel = null;   // level def shown in the intro screen
 let levelCompleteT = 0;       // time since level_complete screen appeared
 let levelCompleteStars = 0;   // stars earned on the just-finished level
 let levelCompleteLevel = null; // level def object for the completed level
@@ -907,6 +920,11 @@ function handleKeyPress(code) {
     }
     return;
   }
+  if (state === "level_intro") {
+    if (levelIntroT > 0.5 && (code === "Enter" || code === "Space")) { startGame(); return; }
+    if (code === "Escape") { state = "campaign_map"; return; }
+    return;
+  }
   if (state === "level_complete") {
     if (levelCompleteT > 0.5) {
       if (code === "Enter" || code === "KeyR") { startGame(); return; }
@@ -951,8 +969,19 @@ function handleClick() {
   }
   if (state === "campaign_map") {
     const lvlId = campaignLevelAt(mouse.x, mouse.y);
-    if (lvlId) { currentLevelId = lvlId; mode = "campaign"; startGame(); return; }
+    if (lvlId) {
+      currentLevelId = lvlId;
+      mode = "campaign";
+      levelIntroLevel = LEVELS.find(l => l.id === lvlId);
+      levelIntroT = 0;
+      state = "level_intro";
+      return;
+    }
     state = "title"; return;
+  }
+  if (state === "level_intro") {
+    if (levelIntroT > 0.5) { startGame(); return; }
+    return;
   }
   if (state === "level_complete") {
     if (levelCompleteT > 0.5) {
@@ -1028,6 +1057,7 @@ function update(dt) {
   updateTexts(dt);
 
   if (state === "over") { gameOverT += dt; return; }
+  if (state === "level_intro") { levelIntroT += dt; return; }
   if (state === "level_complete") { levelCompleteT += dt; return; }
   if (state !== "play" || paused) return;
   if (introPopup) { introPopup.t += dt; return; } // new-hostile briefing freezes play
@@ -1727,13 +1757,14 @@ function render() {
 
   drawStars();
 
-  if (state === "title" || state === "scores" || state === "stats" || state === "ships" || state === "settings" || state === "campaign_map" || state === "level_complete") {
+  if (state === "title" || state === "scores" || state === "stats" || state === "ships" || state === "settings" || state === "campaign_map" || state === "level_intro" || state === "level_complete") {
     drawGrid();
     if (state === "title") drawTitle();
     else if (state === "scores") drawScores();
     else if (state === "stats") drawStats();
     else if (state === "settings") drawSettings();
     else if (state === "campaign_map") drawCampaignMap();
+    else if (state === "level_intro") drawLevelIntro();
     else if (state === "level_complete") drawLevelComplete();
     else drawShips();
     drawParticles();
@@ -2943,6 +2974,78 @@ function drawSettings() {
     ctx.fillStyle = on ? "#27e8a7" : "#ff3d6e";
     ctx.fillText(on ? "ON" : "OFF", px + pw / 2, py + ph / 2 + 4);
   });
+  ctx.restore();
+}
+
+function drawLevelIntro() {
+  const lvl = levelIntroLevel;
+  if (!lvl) return;
+  drawGrid();
+  ctx.save();
+
+  const a = clamp(levelIntroT * 2, 0, 0.92);
+  ctx.fillStyle = `rgba(2,3,10,${a})`;
+  ctx.fillRect(0, 0, W, H);
+
+  if (levelIntroT < 0.15) { ctx.restore(); return; }
+
+  const slideIn = clamp((levelIntroT - 0.15) / 0.4, 0, 1);
+  const eased = 1 - Math.pow(1 - slideIn, 3); // ease-out cubic
+
+  ctx.textAlign = "center";
+
+  // sector label
+  ctx.globalAlpha = eased * 0.7;
+  ctx.font = "bold 11px 'Courier New', monospace";
+  ctx.fillStyle = "#4a7a9a";
+  ctx.fillText(lvl.sector, W / 2, H * 0.26);
+
+  // level number + name
+  ctx.globalAlpha = eased;
+  ctx.font = `bold ${Math.min(W * 0.065, 46)}px 'Courier New', monospace`;
+  neon("#7df9ff", 18 * eased);
+  ctx.fillStyle = "#7df9ff";
+  ctx.fillText(lvl.name, W / 2, H * 0.34);
+  ctx.shadowBlur = 0;
+
+  // lore text
+  if (levelIntroT > 0.45) {
+    const loreA = clamp((levelIntroT - 0.45) / 0.5, 0, 1);
+    ctx.globalAlpha = loreA * 0.85;
+    ctx.font = "italic 14px 'Courier New', monospace";
+    ctx.fillStyle = "#8aa8c8";
+    wrapText('"' + lvl.lore + '"', W / 2, H * 0.45, Math.min(480, W * 0.76), 20);
+  }
+
+  // enemy pool preview
+  if (levelIntroT > 0.85) {
+    const poolA = clamp((levelIntroT - 0.85) / 0.45, 0, 1);
+    ctx.globalAlpha = poolA;
+    ctx.font = "bold 10px 'Courier New', monospace";
+    ctx.fillStyle = "#4a7a9a";
+    ctx.fillText("THREATS DETECTED", W / 2, H * 0.62);
+    ctx.font = "11px 'Courier New', monospace";
+    ctx.fillStyle = "#ff3d6e";
+    const names = lvl.enemyPool.map(k => ENEMY_TYPES[k] ? ENEMY_TYPES[k].name : k);
+    wrapText(names.join("  ·  "), W / 2, H * 0.67, Math.min(520, W * 0.82), 16);
+    // boss warning
+    ctx.font = "bold 11px 'Courier New', monospace";
+    ctx.fillStyle = BOSSES[lvl.boss].color;
+    neon(BOSSES[lvl.boss].color, 6 * poolA);
+    ctx.fillText("BOSS: " + BOSSES[lvl.boss].name, W / 2, H * 0.74);
+    ctx.shadowBlur = 0;
+  }
+
+  // launch prompt
+  if (levelIntroT > 1.2) {
+    const promptA = clamp((levelIntroT - 1.2) / 0.4, 0, 1) * (0.65 + 0.35 * Math.sin(time * 3));
+    ctx.globalAlpha = promptA;
+    ctx.font = "bold 14px 'Courier New', monospace";
+    ctx.fillStyle = "#27e8a7";
+    ctx.fillText(TOUCH.active ? "TAP TO LAUNCH" : "PRESS ENTER TO LAUNCH  · ESC to go back", W / 2, H * 0.87);
+  }
+
+  ctx.globalAlpha = 1;
   ctx.restore();
 }
 
