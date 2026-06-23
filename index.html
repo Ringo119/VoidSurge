@@ -332,7 +332,7 @@ if (typeof document.addEventListener === "function") {
 }
 
 // ---------- Game state ----------
-const VERSION = "1.7.4"; // bump alongside the sw.js cache when shipping
+const VERSION = "1.8.0"; // bump alongside the sw.js cache when shipping
 
 // The arena is a fixed-size world, independent of screen size; a camera
 // follows the player and clamps at the world border. Screens larger than
@@ -355,9 +355,10 @@ let campaignDmgTaken = 0;     // cumulative damage taken in the current campaign
 let levelIntroT = 0;          // time since level_intro screen appeared
 let levelIntroLevel = null;   // level def shown in the intro screen
 let campaignCompleteT = 0;    // time since campaign_complete screen appeared
-let levelCompleteT = 0;       // time since level_complete screen appeared
-let levelCompleteStars = 0;   // stars earned on the just-finished level
+let levelCompleteT = 0;        // time since level_complete screen appeared
+let levelCompleteStars = 0;    // stars earned on the just-finished level
 let levelCompleteLevel = null; // level def object for the completed level
+let levelCompleteNewBest = false; // true when this run beat the previous best score for the level
 let paused = false;
 let wave = 0;
 let score = 0;
@@ -867,6 +868,7 @@ function gameOver() {
 function levelComplete(lvl) {
   const stars = campaignDmgTaken === 0 ? 3 : campaignDmgTaken <= player.maxHp * 0.4 ? 2 : 1;
   const prog = campaignProgress[lvl.id] || {};
+  levelCompleteNewBest = score > (prog.bestScore || 0);
   campaignProgress[lvl.id] = {
     unlocked: true,
     completed: true,
@@ -2703,6 +2705,24 @@ function drawTitle() {
     ctx.fillText("HIGH SCORE  " + highScore.toLocaleString(), W / 2, H * 0.84);
   }
 
+  // Campaign progress badge
+  const _cleared = LEVELS.filter(l => getCampaignLevelData(l.id).completed).length;
+  if (_cleared > 0) {
+    const _totalStars = LEVELS.reduce((s, l) => s + (getCampaignLevelData(l.id).stars || 0), 0);
+    ctx.font = "bold 11px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    const badgeCol = _cleared === LEVELS.length ? "#ffe066" : "#4a7a9a";
+    ctx.fillStyle = badgeCol;
+    if (_cleared === LEVELS.length) neon(badgeCol, 6);
+    ctx.fillText(
+      _cleared === LEVELS.length
+        ? `CAMPAIGN COMPLETE  ★ ${_totalStars}/18`
+        : `CAMPAIGN  ${_cleared}/${LEVELS.length} LEVELS CLEARED`,
+      W / 2, H * 0.84 + (_cleared > 0 && highScore > 0 ? 20 : 0)
+    );
+    ctx.shadowBlur = 0;
+  }
+
   // menu buttons: scores / stats / hangar
   for (const b of titleButtons()) {
     const hov = !TOUCH.active && inRect(mouse.x, mouse.y, b);
@@ -3168,7 +3188,7 @@ function drawCampaignMap() {
       ctx.fillText(lvl.waves + " waves", r.x + r.w - 10, cy);
     }
 
-    // Stars
+    // Stars + best score
     if (!locked) {
       const starCount = prog.stars || 0;
       const starX = r.x + r.w * 0.58;
@@ -3177,6 +3197,12 @@ function drawCampaignMap() {
         ctx.font = "12px 'Courier New', monospace";
         ctx.textAlign = "left";
         ctx.fillText("★", starX + s * 16, r.y + r.h * 0.3 + 4);
+      }
+      if (prog.bestScore > 0) {
+        ctx.font = "9px 'Courier New', monospace";
+        ctx.fillStyle = completed ? "#7a6a20" : "#3a5a6a";
+        ctx.textAlign = "left";
+        ctx.fillText(prog.bestScore.toLocaleString(), starX, cy);
       }
     }
   });
@@ -3244,6 +3270,21 @@ function drawLevelComplete() {
     ctx.font = "bold 18px 'Courier New', monospace";
     ctx.fillStyle = "#ffe066";
     ctx.fillText("SCORE  " + score.toLocaleString(), W / 2, H * 0.63);
+
+    if (levelCompleteNewBest) {
+      neon("#27e8a7", 10);
+      ctx.font = "bold 12px 'Courier New', monospace";
+      ctx.fillStyle = "#27e8a7";
+      ctx.fillText("★ NEW BEST SCORE ★", W / 2, H * 0.63 + 22);
+      ctx.shadowBlur = 0;
+    } else {
+      const prevBest = levelCompleteLevel ? (getCampaignLevelData(levelCompleteLevel.id).bestScore || 0) : 0;
+      if (prevBest > 0) {
+        ctx.font = "11px 'Courier New', monospace";
+        ctx.fillStyle = "#4a6a7a";
+        ctx.fillText("BEST: " + prevBest.toLocaleString(), W / 2, H * 0.63 + 22);
+      }
+    }
   }
 
   // Action buttons
