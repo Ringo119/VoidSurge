@@ -264,6 +264,10 @@ function onTouchStart(e) {
       }
       return;
     }
+    if (state === "campaign_complete") {
+      if (campaignCompleteT > 1.0) { state = "campaign_map"; return; }
+      return;
+    }
     if (state === "scores" || state === "stats") { state = "title"; return; }
     if (state === "ships") { if (!shipCardAction(x, y)) state = "title"; return; }
     if (state === "settings") { if (!settingAction(x, y)) state = "title"; return; }
@@ -328,7 +332,7 @@ if (typeof document.addEventListener === "function") {
 }
 
 // ---------- Game state ----------
-const VERSION = "1.7.3"; // bump alongside the sw.js cache when shipping
+const VERSION = "1.7.4"; // bump alongside the sw.js cache when shipping
 
 // The arena is a fixed-size world, independent of screen size; a camera
 // follows the player and clamps at the world border. Screens larger than
@@ -344,12 +348,13 @@ function updateCamera(dt) {
   cam.y += (ty - cam.y) * k;
 }
 
-let state = "title";          // title | play | upgrade | over | campaign_map | level_intro | level_complete
+let state = "title";          // title | play | upgrade | over | campaign_map | level_intro | level_complete | campaign_complete
 let mode = "survival";        // "survival" | "campaign"
 let currentLevelId = 0;       // active level in campaign mode (0 = none)
 let campaignDmgTaken = 0;     // cumulative damage taken in the current campaign run
 let levelIntroT = 0;          // time since level_intro screen appeared
 let levelIntroLevel = null;   // level def shown in the intro screen
+let campaignCompleteT = 0;    // time since campaign_complete screen appeared
 let levelCompleteT = 0;       // time since level_complete screen appeared
 let levelCompleteStars = 0;   // stars earned on the just-finished level
 let levelCompleteLevel = null; // level def object for the completed level
@@ -878,8 +883,16 @@ function levelComplete(lvl) {
   levelCompleteT = 0;
   levelCompleteStars = stars;
   levelCompleteLevel = lvl;
-  state = "level_complete";
   Sound.upgrade(); // victory chime
+
+  // Check if all levels are now complete
+  const allDone = LEVELS.every(l => getCampaignLevelData(l.id).completed);
+  if (allDone && lvl.id === LEVELS.length) {
+    campaignCompleteT = 0;
+    state = "campaign_complete";
+  } else {
+    state = "level_complete";
+  }
 }
 
 function startGame() {
@@ -933,6 +946,10 @@ function handleKeyPress(code) {
       if (code === "Enter" || code === "KeyR") { startGame(); return; }
       if (code === "Escape" || code === "KeyT" || code === "KeyC") { state = "campaign_map"; return; }
     }
+    return;
+  }
+  if (state === "campaign_complete") {
+    if (campaignCompleteT > 1.0 && (code === "Enter" || code === "Escape" || code === "Space")) { state = "campaign_map"; return; }
     return;
   }
   if (state === "over") {
@@ -992,6 +1009,10 @@ function handleClick() {
       if (inRect(mouse.x, mouse.y, r.retry)) { startGame(); return; }
       if (inRect(mouse.x, mouse.y, r.map)) { state = "campaign_map"; return; }
     }
+    return;
+  }
+  if (state === "campaign_complete") {
+    if (campaignCompleteT > 1.0) { state = "campaign_map"; return; }
     return;
   }
   if (state === "scores" || state === "stats") { state = "title"; return; }
@@ -1062,6 +1083,7 @@ function update(dt) {
   if (state === "over") { gameOverT += dt; return; }
   if (state === "level_intro") { levelIntroT += dt; return; }
   if (state === "level_complete") { levelCompleteT += dt; return; }
+  if (state === "campaign_complete") { campaignCompleteT += dt; return; }
   if (state !== "play" || paused) return;
   if (introPopup) { introPopup.t += dt; return; } // new-hostile briefing freezes play
 
@@ -1760,7 +1782,7 @@ function render() {
 
   drawStars();
 
-  if (state === "title" || state === "scores" || state === "stats" || state === "ships" || state === "settings" || state === "campaign_map" || state === "level_intro" || state === "level_complete") {
+  if (state === "title" || state === "scores" || state === "stats" || state === "ships" || state === "settings" || state === "campaign_map" || state === "level_intro" || state === "level_complete" || state === "campaign_complete") {
     drawGrid();
     if (state === "title") drawTitle();
     else if (state === "scores") drawScores();
@@ -1769,6 +1791,7 @@ function render() {
     else if (state === "campaign_map") drawCampaignMap();
     else if (state === "level_intro") drawLevelIntro();
     else if (state === "level_complete") drawLevelComplete();
+    else if (state === "campaign_complete") drawCampaignComplete();
     else drawShips();
     drawParticles();
     drawToasts();
@@ -3245,6 +3268,100 @@ function drawLevelComplete() {
     }
   }
 
+  ctx.restore();
+}
+
+function drawCampaignComplete() {
+  drawGrid();
+  ctx.save();
+  const a = clamp(campaignCompleteT * 1.2, 0, 0.95);
+  ctx.fillStyle = `rgba(2,3,10,${a})`;
+  ctx.fillRect(0, 0, W, H);
+
+  if (campaignCompleteT < 0.3) { ctx.restore(); return; }
+
+  ctx.textAlign = "center";
+
+  // Animated star field burst: scatter particles drawn via canvas
+  if (campaignCompleteT > 0.5) {
+    for (let i = 0; i < 32; i++) {
+      const ang = (TAU / 32) * i + campaignCompleteT * 0.4;
+      const r = Math.min(W, H) * 0.32 * clamp((campaignCompleteT - 0.5) / 1.2, 0, 1);
+      const pa = clamp((campaignCompleteT - 0.5) / 0.8, 0, 0.35);
+      ctx.globalAlpha = pa;
+      ctx.fillStyle = i % 3 === 0 ? "#ffe066" : i % 3 === 1 ? "#7df9ff" : "#27e8a7";
+      ctx.beginPath();
+      ctx.arc(W / 2 + Math.cos(ang) * r, H * 0.4 + Math.sin(ang) * r * 0.5, 2.5, 0, TAU);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // "THE VOID FALLS SILENT"
+  const titleA = clamp((campaignCompleteT - 0.3) / 0.7, 0, 1);
+  ctx.globalAlpha = titleA;
+  ctx.font = `bold ${Math.min(W * 0.07, 52)}px 'Courier New', monospace`;
+  neon("#ffe066", 28 * titleA);
+  ctx.fillStyle = "#ffe066";
+  ctx.fillText("THE VOID FALLS SILENT", W / 2, H * 0.22);
+  ctx.shadowBlur = 0;
+
+  ctx.font = "bold 15px 'Courier New', monospace";
+  ctx.fillStyle = "#8aa8c8";
+  ctx.fillText("You have purged all six sectors.", W / 2, H * 0.22 + 32);
+
+  // Star tally
+  if (campaignCompleteT > 1.0) {
+    const tallyA = clamp((campaignCompleteT - 1.0) / 0.6, 0, 1);
+    ctx.globalAlpha = tallyA;
+    const totalStars = LEVELS.reduce((s, l) => s + (getCampaignLevelData(l.id).stars || 0), 0);
+    const maxStars = LEVELS.length * 3;
+    ctx.font = "bold 20px 'Courier New', monospace";
+    ctx.fillStyle = "#ffe066";
+    neon("#ffe066", 10 * tallyA);
+    ctx.fillText(`★  ${totalStars} / ${maxStars}  STARS`, W / 2, H * 0.42);
+    ctx.shadowBlur = 0;
+    ctx.font = "13px 'Courier New', monospace";
+    ctx.fillStyle = "#8aa8c8";
+    const msg = totalStars === maxStars ? "FLAWLESS VOID PURGE — all sectors cleared without taking a single hit."
+      : totalStars >= 14 ? "ELITE PILOT — the void barely touched you."
+      : totalStars >= 10 ? "VETERAN PILOT — a worthy purge."
+      : "SURVIVOR — the void tested you, and you endured.";
+    wrapText(msg, W / 2, H * 0.49, Math.min(520, W * 0.82), 18);
+  }
+
+  // Level star breakdown
+  if (campaignCompleteT > 1.8) {
+    const breakA = clamp((campaignCompleteT - 1.8) / 0.6, 0, 1);
+    ctx.globalAlpha = breakA * 0.9;
+    const cols = LEVELS.length;
+    const colW = Math.min(72, (W - 40) / cols);
+    const bx0 = W / 2 - (colW * cols) / 2;
+    LEVELS.forEach((lvl, i) => {
+      const prog = getCampaignLevelData(lvl.id);
+      const bx = bx0 + i * colW + colW / 2;
+      const by = H * 0.62;
+      ctx.font = "9px 'Courier New', monospace";
+      ctx.fillStyle = "#4a7a9a";
+      ctx.fillText("LV" + lvl.id, bx, by);
+      for (let s = 0; s < 3; s++) {
+        ctx.fillStyle = s < (prog.stars || 0) ? "#ffe066" : "#2a3a4a";
+        ctx.font = "13px 'Courier New', monospace";
+        ctx.fillText("★", bx - 14 + s * 14, by + 18);
+      }
+    });
+  }
+
+  // Prompt
+  if (campaignCompleteT > 2.4) {
+    const pA = clamp((campaignCompleteT - 2.4) / 0.5, 0, 1) * (0.65 + 0.35 * Math.sin(time * 2.5));
+    ctx.globalAlpha = pA;
+    ctx.font = "bold 13px 'Courier New', monospace";
+    ctx.fillStyle = "#7df9ff";
+    ctx.fillText(TOUCH.active ? "TAP TO RETURN TO MAP" : "PRESS ENTER TO RETURN TO MAP", W / 2, H * 0.85);
+  }
+
+  ctx.globalAlpha = 1;
   ctx.restore();
 }
 
