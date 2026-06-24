@@ -328,13 +328,13 @@ check("mother launches broods", get("enemies.length") >= 2);
 // modifiers arrive once a boss has been fought before in the run
 run("startWave(20);");
 frames(200);
-check("repeat mother gains modifier", get("boss !== null") && get("boss.id") === "mother" && get("boss.mod !== null && typeof boss.modName === 'string'"));
+check("repeat mother gains modifier", get("boss !== null") && get("boss.id") === "mother" && get("Array.isArray(boss.mods) && boss.mods.length > 0"));
 run("startWave(15);");
 frames(200);
-check("first harbinger of the run is unmodified", get("boss !== null") && get("boss.id") === "harbinger" && get("boss.mod") === null);
+check("first harbinger of the run is unmodified", get("boss !== null") && get("boss.id") === "harbinger" && get("boss.mods.length") === 0);
 run("startWave(25);");
 frames(200);
-check("repeat harbinger gains modifier", get("boss !== null") && get("boss.id") === "harbinger" && get("boss.mod !== null"));
+check("repeat harbinger gains modifier", get("boss !== null") && get("boss.id") === "harbinger" && get("boss.mods.length > 0"));
 frames(300);
 check("boss frames run clean", true);
 
